@@ -195,6 +195,16 @@ public final class WindowFocuser: WindowFocusing {
         return nil
     }
 
+    /// Check if a window is on a full-screen Space (CGSSpaceType == 4).
+    /// Uses CGS to check in real-time — more reliable than cached AX state.
+    public func isWindowOnFullScreenSpace(windowID: UInt32) -> Bool {
+        let cid = CGSMainConnectionID()
+        guard let spacesCF = CGSCopySpacesForWindows(cid, 0x7, [windowID as NSNumber] as CFArray),
+              let spaceIDs = spacesCF as? [UInt64],
+              let spaceID = spaceIDs.first else { return false }
+        return CGSSpaceGetType(cid, spaceID) == 4
+    }
+
     /// Calculate direction and count of Ctrl+Arrow presses needed to reach
     /// the target window's Space from the current Space. Works for any
     /// Space type combination (normal↔normal, normal↔fullscreen).

@@ -247,11 +247,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Focus Logic
 
     private func performFocus(_ windowInfo: WindowInfo) {
-        if windowInfo.state != .fullScreen,
-           let _ = focuser.checkFullScreenBlock(targetWindowID: windowInfo.id) {
+        // Re-detect fullscreen state via CGS (tracker's isFullScreen can be stale)
+        var state = windowInfo.state
+        if state != .fullScreen && focuser.isWindowOnFullScreenSpace(windowID: windowInfo.id) {
+            state = .fullScreen
+            print("[WP] performFocus: CGS detected fullscreen for wid=\(windowInfo.id)")
+        }
+        let info = WindowInfo(
+            id: windowInfo.id, ownerPID: windowInfo.ownerPID,
+            title: windowInfo.title, bounds: windowInfo.bounds, state: state
+        )
+
+        if info.state != .fullScreen,
+           let _ = focuser.checkFullScreenBlock(targetWindowID: info.id) {
             // fullscreen→normal: try Ctrl+Arrow via Dock first (preserves fullscreen).
             // Falls back to exitCurrentFullScreen if Dock doesn't respond.
-            if let nav = focuser.calculateSpaceNavigation(targetWindowID: windowInfo.id) {
+            if let nav = focuser.calculateSpaceNavigation(targetWindowID: info.id) {
                 print("[WP] fullscreen→normal: trying Ctrl+Arrow to Dock (preserving fullscreen)")
 
                 let dockPID = NSRunningApplication.runningApplications(
@@ -267,31 +278,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // Check if it worked after animation time
                 let checkDelay = Double(nav.count) * 0.7 + 0.3
                 DispatchQueue.main.asyncAfter(deadline: .now() + checkDelay) {
-                    if self.focuser.calculateSpaceNavigation(targetWindowID: windowInfo.id) != nil {
-                        // Didn't switch — fall back to exit fullscreen
+                    if self.focuser.calculateSpaceNavigation(targetWindowID: info.id) != nil {
                         print("[WP] Ctrl+Arrow didn't work, falling back to exitCurrentFullScreen")
                         _ = self.focuser.exitCurrentFullScreen()
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
                             _ = self.focuser.focus(
-                                pid: windowInfo.ownerPID,
-                                windowID: windowInfo.id,
-                                windowTitle: windowInfo.title,
-                                state: windowInfo.state
+                                pid: info.ownerPID, windowID: info.id,
+                                windowTitle: info.title, state: info.state
                             )
                         }
                     } else {
-                        // Worked! Focus the target window
                         print("[WP] Ctrl+Arrow switched Space successfully")
                         _ = self.focuser.focus(
-                            pid: windowInfo.ownerPID,
-                            windowID: windowInfo.id,
-                            windowTitle: windowInfo.title,
-                            state: windowInfo.state
+                            pid: info.ownerPID, windowID: info.id,
+                            windowTitle: info.title, state: info.state
                         )
                         self.focuser.raiseWindow(
-                            pid: windowInfo.ownerPID,
-                            windowID: windowInfo.id,
-                            windowTitle: windowInfo.title
+                            pid: info.ownerPID, windowID: info.id,
+                            windowTitle: info.title
                         )
                     }
                 }
@@ -301,70 +305,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 _ = focuser.exitCurrentFullScreen()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
                     _ = self.focuser.focus(
-                        pid: windowInfo.ownerPID,
-                        windowID: windowInfo.id,
-                        windowTitle: windowInfo.title,
-                        state: windowInfo.state
+                        pid: info.ownerPID, windowID: info.id,
+                        windowTitle: info.title, state: info.state
                     )
                 }
             }
 
-        } else if windowInfo.state == .fullScreen {
-            // normal→fullscreen: CGS switch first (so AX can see the window),
-            // then immediately exit fullscreen. The window returns to a normal
-            // Space with near-fullscreen size. No re-enter — avoids menu bar
-            // residual that CGS-based fullscreen switching causes on macOS 16.
+        } else if info.state == .fullScreen {
+            // normal→fullscreen: CGS switch → exit → focus → re-enter
             print("[WP] normal→fullscreen: CGS switch then exit fullscreen")
 
-            // Step 1: CGS switch to the fullscreen Space
             _ = focuser.focus(
-                pid: windowInfo.ownerPID,
-                windowID: windowInfo.id,
-                windowTitle: windowInfo.title,
-                state: windowInfo.state
+                pid: info.ownerPID, windowID: info.id,
+                windowTitle: info.title, state: info.state
             )
 
-            // Step 2: Exit fullscreen immediately (AX can see it now)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                 _ = self.focuser.exitCurrentFullScreen()
             }
 
-            // Step 3: Focus the now-normal window
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
                 _ = self.focuser.focus(
-                    pid: windowInfo.ownerPID,
-                    windowID: windowInfo.id,
-                    windowTitle: windowInfo.title,
-                    state: .normal
+                    pid: info.ownerPID, windowID: info.id,
+                    windowTitle: info.title, state: .normal
                 )
                 self.focuser.raiseWindow(
-                    pid: windowInfo.ownerPID,
-                    windowID: windowInfo.id,
-                    windowTitle: windowInfo.title
+                    pid: info.ownerPID, windowID: info.id,
+                    windowTitle: info.title
                 )
             }
 
-            // Step 4: Re-enter fullscreen
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                 self.focuser.reEnterFullScreen(
-                    pid: windowInfo.ownerPID, windowID: windowInfo.id,
-                    windowTitle: windowInfo.title
+                    pid: info.ownerPID, windowID: info.id,
+                    windowTitle: info.title
                 )
             }
 
         } else {
             // normal→normal
             _ = focuser.focus(
-                pid: windowInfo.ownerPID,
-                windowID: windowInfo.id,
-                windowTitle: windowInfo.title,
-                state: windowInfo.state
+                pid: info.ownerPID, windowID: info.id,
+                windowTitle: info.title, state: info.state
             )
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 self.focuser.raiseWindow(
-                    pid: windowInfo.ownerPID,
-                    windowID: windowInfo.id,
-                    windowTitle: windowInfo.title
+                    pid: info.ownerPID, windowID: info.id,
+                    windowTitle: info.title
                 )
             }
         }

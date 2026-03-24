@@ -1,0 +1,29 @@
+# Build
+.build/
+*.o
+*.d
+*.swp
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Package Manager
+Package.resolved
+
+# Ratchet working files
+.ratchet/
+
+# Editor
+*.swp
+*~
+
+# Worktrees
+windowpilot-fixes/

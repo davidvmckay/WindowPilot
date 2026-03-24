@@ -136,17 +136,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let title = (titleRef as? String) ?? appName
 
         // Detect transient windows (popups, notifications, "Build Succeeded", etc.)
-        // Check AX subrole — transient windows are often AXDialog, AXFloatingWindow,
-        // AXSystemDialog, or have no subrole. Also check size: tiny windows are popups.
+        var isTransient = false
+
+        // 1. Check AX subrole
         var subroleRef: CFTypeRef?
         AXUIElementCopyAttributeValue(axWindow, kAXSubroleAttribute as CFString, &subroleRef)
         let subrole = subroleRef as? String ?? ""
         let transientSubroles: Set<String> = [
             "AXFloatingWindow", "AXSystemFloatingWindow", "AXSystemDialog"
         ]
-        var isTransient = transientSubroles.contains(subrole)
+        if transientSubroles.contains(subrole) { isTransient = true }
 
-        // Also check window size via CGWindowList — tiny windows are likely transient
+        // 2. No close button → transient (popups, banners, notifications)
+        if !isTransient {
+            var closeRef: CFTypeRef?
+            if AXUIElementCopyAttributeValue(axWindow, kAXCloseButtonAttribute as CFString, &closeRef) != .success {
+                isTransient = true
+            }
+        }
+
+        // 3. Small windows → transient
         if !isTransient,
            let windowList = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] {
             for info in windowList {
@@ -154,7 +163,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                       wid == windowID,
                       let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
                       let w = bounds["Width"], let h = bounds["Height"] else { continue }
-                // Windows smaller than 200x100 are likely transient popups
                 if w < 200 || h < 100 { isTransient = true }
                 break
             }

@@ -18,6 +18,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var hasScreenRecording = false
     private var workspaceObserver: Any?
+    private var trackingTimer: Timer?
+    private var lastTrackedWindowID: UInt32 = 0
 
     // MARK: - Lifecycle
 
@@ -80,12 +82,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Activity Tracking
 
     private func startActivityTracking() {
+        // Listen for app switches
         workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil, queue: .main
         ) { [weak self] _ in
             self?.trackFocusedWindow()
         }
+
+        // Poll every 2s to catch window changes that don't trigger notifications:
+        // - Same app, different window (e.g., clicking another Chrome window on monitor 2)
+        // - Window focus changes within the same app
+        trackingTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            self?.trackFocusedWindow()
+        }
+
         // Track the currently focused window at launch
         trackFocusedWindow()
     }
@@ -114,6 +125,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             to: (@convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError).self
         )
         guard getWindowFunc(axWindow, &windowID) == .success, windowID != 0 else { return }
+
+        // Skip if same window is still focused (avoid redundant updates from timer)
+        guard windowID != lastTrackedWindowID else { return }
+        lastTrackedWindowID = windowID
 
         // Get window title
         var titleRef: CFTypeRef?

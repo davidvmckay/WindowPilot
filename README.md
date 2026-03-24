@@ -1,15 +1,15 @@
-# Window Palette
+# WindowPilot
 
 **A macOS-native hotkey-summoned window navigator.** Press `Option+Space`, see every window on your Mac organized by app, click to preview, Enter to focus. Recognition over recall.
 
-Window Palette solves the fundamental problem of window switching on macOS: you shouldn't have to *remember* which window you want — you should be able to *see and pick* from everything that's open. Cmd+Tab only switches apps. Mission Control is slow and visual-only. Window Palette gives you a fast, keyboard-driven, two-level tree of every window on every Space, with instant screenshot previews.
+WindowPilot solves the fundamental problem of window switching on macOS: you shouldn't have to *remember* which window you want — you should be able to *see and pick* from everything that's open. Cmd+Tab only switches apps. Mission Control is slow and visual-only. WindowPilot gives you a fast, keyboard-driven, two-level tree of every window on every Space, with instant screenshot previews.
 
 ## How It Works
 
 1. **Summon** — Press `Option+Space` from anywhere. A floating panel appears without stealing focus from your current app.
 2. **Browse** — Two-level tree: Apps on the left (expand to see windows), live screenshot preview on the right.
 3. **Search** — Type to filter by app name or window title. Fuzzy, instant.
-4. **Focus** — Click, Enter, or double-click any window. Window Palette navigates to the correct Space, raises the exact window, and dismisses itself.
+4. **Focus** — Click, Enter, or double-click any window. WindowPilot navigates to the correct Space, raises the exact window, and dismisses itself.
 5. **Dismiss** — Press `Escape`, press the hotkey again, or click anywhere outside the panel.
 
 ## Features
@@ -34,8 +34,8 @@ Window Palette solves the fundamental problem of window switching on macOS: you 
 
 ```bash
 # Clone and build
-git clone https://github.com/ethannortharc/window-palette.git
-cd window-palette
+git clone https://github.com/ethannortharc/WindowPilot.git
+cd WindowPilot
 swift build
 
 # Run
@@ -87,7 +87,7 @@ Sources/
 
 ## Full-Screen Space Switching
 
-This is where Window Palette pushes the boundaries of what's possible on macOS. Full-screen Space switching is a notoriously difficult problem because macOS 16 (Tahoe) significantly restricted programmatic Space control.
+This is where WindowPilot pushes the boundaries of what's possible on macOS. Full-screen Space switching is a notoriously difficult problem because macOS 16 (Tahoe) significantly restricted programmatic Space control.
 
 ### The Problem
 
@@ -115,7 +115,7 @@ The only programmatic Space-switching mechanism — `CGSManagedDisplaySetCurrent
 
 ### Our Solution
 
-Since no mechanism can trigger the Dock's native animation, Window Palette uses a **multi-step AX-based approach** that leverages macOS's own full-screen entry/exit animations:
+Since no mechanism can trigger the Dock's native animation, WindowPilot uses a **multi-step AX-based approach** that leverages macOS's own full-screen entry/exit animations:
 
 **Normal → Full-Screen:**
 1. `CGSManagedDisplaySetCurrentSpace` — instant switch to the full-screen Space (brief stale menu bar)
@@ -133,7 +133,7 @@ Since no mechanism can trigger the Dock's native animation, Window Palette uses 
 
 - **Full-screen exit is destructive** — When switching from a full-screen Space to a normal window, the full-screen window must exit full-screen mode (it cannot stay in full-screen in the background). This is because `CGSManagedDisplaySetCurrentSpace` causes floating artifacts, and macOS 16 blocks all forms of simulated Ctrl+Arrow events.
 - **Normal→full-screen has a visible transition** — The exit + re-enter dance takes ~0.5-0.7 seconds with visible animation. This is the trade-off for a correct menu bar.
-- **AX window visibility is Space-dependent** — On macOS 16, `_AXUIElementGetWindow` and the `AXFullScreen` attribute are not accessible for windows on other Spaces. Window Palette works around this by switching to the target Space first via CGS, then performing AX operations.
+- **AX window visibility is Space-dependent** — On macOS 16, `_AXUIElementGetWindow` and the `AXFullScreen` attribute are not accessible for windows on other Spaces. WindowPilot works around this by switching to the target Space first via CGS, then performing AX operations.
 - **Screen Recording permission** — Without it, window previews show app icon + window title placeholders instead of live screenshots.
 
 ### macOS 16 Private API Notes

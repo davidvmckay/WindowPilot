@@ -3,28 +3,31 @@ import WindowPilotCore
 
 // MARK: - RecentView
 
-/// Scrollable list of most recently used windows with thumbnail previews.
-/// Each row shows: screenshot thumbnail, app icon, app name, window title,
-/// total duration, and "ago" text.
+/// Grid of most recently used windows with thumbnail previews.
+/// 3 columns per row. Each card: screenshot on top, info below.
 public final class RecentView: NSView {
 
     // MARK: Callbacks
 
-    /// Called when a row is selected (single click).
     public var onWindowSelected: ((WindowInfo) -> Void)?
-
-    /// Called when a row is activated (double-click or Enter).
     public var onWindowActivated: ((WindowInfo) -> Void)?
+
+    // MARK: Constants
+
+    private let columns = 3
+    private let cardSpacing: CGFloat = 8
+    private let cardPadding: CGFloat = 10
 
     // MARK: Subviews
 
     private let scrollView = NSScrollView()
-    private let stackView = NSStackView()
+    private let containerView = NSView()
 
     // MARK: State
 
     private var trackedWindows: [TrackedWindow] = []
     private var thumbnails: [UInt32: CGImage] = [:]
+    private var cardViews: [RecentCardView] = []
     private var selectedIndex: Int = -1
 
     // MARK: Init
@@ -41,28 +44,21 @@ public final class RecentView: NSView {
 
     // MARK: Public API
 
-    /// Reload the list with new tracked window data and thumbnails.
-    public func reloadData(
-        windows: [TrackedWindow],
-        thumbnails: [UInt32: CGImage]
-    ) {
+    public func reloadData(windows: [TrackedWindow], thumbnails: [UInt32: CGImage]) {
         self.trackedWindows = windows
         self.thumbnails = thumbnails
         selectedIndex = -1
-        rebuildRows()
+        rebuildGrid()
     }
 
-    /// Update thumbnails without rebuilding the entire view.
     public func updateThumbnails(_ newThumbnails: [UInt32: CGImage]) {
         for (wid, image) in newThumbnails {
             thumbnails[wid] = image
         }
-        // Update existing thumbnail views
-        for (i, view) in stackView.arrangedSubviews.enumerated() {
+        for (i, card) in cardViews.enumerated() {
             guard i < trackedWindows.count,
-                  let row = view as? RecentRowView,
-                  let newImage = newThumbnails[trackedWindows[i].id] else { continue }
-            row.updateThumbnail(newImage)
+                  let img = newThumbnails[trackedWindows[i].id] else { continue }
+            card.updateThumbnail(img)
         }
     }
 
@@ -72,18 +68,28 @@ public final class RecentView: NSView {
 
     public override func keyDown(with event: NSEvent) {
         switch event.keyCode {
+        case 124: // Right arrow
+            selectCard(at: min(selectedIndex + 1, trackedWindows.count - 1))
+        case 123: // Left arrow
+            selectCard(at: max(selectedIndex - 1, 0))
         case 125: // Down arrow
-            selectRow(at: min(selectedIndex + 1, trackedWindows.count - 1))
+            selectCard(at: min(selectedIndex + columns, trackedWindows.count - 1))
         case 126: // Up arrow
-            selectRow(at: max(selectedIndex - 1, 0))
+            selectCard(at: max(selectedIndex - columns, 0))
         case 36: // Enter
             if selectedIndex >= 0, selectedIndex < trackedWindows.count {
-                let tracked = trackedWindows[selectedIndex]
-                onWindowActivated?(windowInfo(from: tracked))
+                onWindowActivated?(windowInfo(from: trackedWindows[selectedIndex]))
             }
         default:
             super.keyDown(with: event)
         }
+    }
+
+    // MARK: Layout
+
+    public override func layout() {
+        super.layout()
+        layoutCards()
     }
 
     // MARK: Private
@@ -96,15 +102,12 @@ public final class RecentView: NSView {
         scrollView.borderType = .noBorder
         addSubview(scrollView)
 
-        stackView.orientation = .vertical
-        stackView.spacing = 1
-        stackView.translatesAutoresizingMaskIntoConstraints = false
-        stackView.setHuggingPriority(.defaultLow, for: .horizontal)
+        containerView.translatesAutoresizingMaskIntoConstraints = false
 
         let clipView = NSClipView()
         clipView.translatesAutoresizingMaskIntoConstraints = false
         clipView.drawsBackground = false
-        clipView.documentView = stackView
+        clipView.documentView = containerView
         scrollView.contentView = clipView
 
         NSLayoutConstraint.activate([
@@ -113,67 +116,100 @@ public final class RecentView: NSView {
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            stackView.topAnchor.constraint(equalTo: clipView.topAnchor),
-            stackView.leadingAnchor.constraint(equalTo: clipView.leadingAnchor),
-            stackView.trailingAnchor.constraint(equalTo: clipView.trailingAnchor),
-            stackView.widthAnchor.constraint(equalTo: clipView.widthAnchor),
+            containerView.topAnchor.constraint(equalTo: clipView.topAnchor),
+            containerView.leadingAnchor.constraint(equalTo: clipView.leadingAnchor),
+            containerView.trailingAnchor.constraint(equalTo: clipView.trailingAnchor),
+            containerView.widthAnchor.constraint(equalTo: clipView.widthAnchor),
         ])
     }
 
-    private func rebuildRows() {
-        // Remove old rows
-        for view in stackView.arrangedSubviews {
-            stackView.removeArrangedSubview(view)
-            view.removeFromSuperview()
+    private func rebuildGrid() {
+        // Remove old cards
+        for card in cardViews {
+            card.removeFromSuperview()
         }
+        cardViews.removeAll()
 
         if trackedWindows.isEmpty {
             let label = NSTextField(labelWithString: "No recent windows yet")
             label.textColor = .tertiaryLabelColor
             label.alignment = .center
+            label.font = .systemFont(ofSize: 13)
             label.translatesAutoresizingMaskIntoConstraints = false
-            stackView.addArrangedSubview(label)
-            label.heightAnchor.constraint(equalToConstant: 80).isActive = true
+            containerView.addSubview(label)
+            NSLayoutConstraint.activate([
+                label.centerXAnchor.constraint(equalTo: containerView.centerXAnchor),
+                label.topAnchor.constraint(equalTo: containerView.topAnchor, constant: 40),
+            ])
+            containerView.frame.size.height = 100
             return
         }
 
         for (index, tracked) in trackedWindows.enumerated() {
-            let row = RecentRowView(
+            let card = RecentCardView(
                 tracked: tracked,
                 thumbnail: thumbnails[tracked.id],
                 index: index
             )
-            row.onClicked = { [weak self] idx in
-                self?.selectRow(at: idx)
+            card.onClicked = { [weak self] idx in
+                self?.selectCard(at: idx)
             }
-            row.onDoubleClicked = { [weak self] idx in
+            card.onDoubleClicked = { [weak self] idx in
                 guard let self, idx < self.trackedWindows.count else { return }
                 self.onWindowActivated?(self.windowInfo(from: self.trackedWindows[idx]))
             }
-            stackView.addArrangedSubview(row)
-            row.leadingAnchor.constraint(equalTo: stackView.leadingAnchor).isActive = true
-            row.trailingAnchor.constraint(equalTo: stackView.trailingAnchor).isActive = true
+            containerView.addSubview(card)
+            cardViews.append(card)
         }
+
+        layoutCards()
     }
 
-    private func selectRow(at index: Int) {
+    private func layoutCards() {
+        let totalWidth = scrollView.contentView.bounds.width
+        guard totalWidth > 0, !cardViews.isEmpty else { return }
+
+        let availableWidth = totalWidth - cardPadding * 2 - cardSpacing * CGFloat(columns - 1)
+        let cardWidth = max(availableWidth / CGFloat(columns), 100)
+        let thumbHeight = cardWidth * 0.6  // 5:3 aspect ratio
+        let cardHeight = thumbHeight + 52  // thumbnail + info area
+
+        var y: CGFloat = cardPadding
+
+        for (index, card) in cardViews.enumerated() {
+            let col = index % columns
+            let x = cardPadding + CGFloat(col) * (cardWidth + cardSpacing)
+
+            card.frame = NSRect(x: x, y: y, width: cardWidth, height: cardHeight)
+            card.updateLayout(thumbnailHeight: thumbHeight)
+
+            // Move to next row after last column
+            if col == columns - 1 {
+                y += cardHeight + cardSpacing
+            }
+        }
+
+        // Handle last incomplete row
+        let lastCol = (cardViews.count - 1) % columns
+        if lastCol < columns - 1 {
+            y += cardHeight + cardSpacing
+        }
+
+        containerView.frame.size.height = y + cardPadding
+    }
+
+    private func selectCard(at index: Int) {
         guard index >= 0, index < trackedWindows.count else { return }
 
-        // Deselect old
-        if selectedIndex >= 0, selectedIndex < stackView.arrangedSubviews.count,
-           let oldRow = stackView.arrangedSubviews[selectedIndex] as? RecentRowView {
-            oldRow.setSelected(false)
+        if selectedIndex >= 0, selectedIndex < cardViews.count {
+            cardViews[selectedIndex].setSelected(false)
         }
-
         selectedIndex = index
-
-        // Select new
-        if let newRow = stackView.arrangedSubviews[index] as? RecentRowView {
-            newRow.setSelected(true)
+        if index < cardViews.count {
+            cardViews[index].setSelected(true)
         }
 
-        let tracked = trackedWindows[index]
-        onWindowSelected?(windowInfo(from: tracked))
+        onWindowSelected?(windowInfo(from: trackedWindows[index]))
     }
 
     private func windowInfo(from tracked: TrackedWindow) -> WindowInfo {
@@ -182,119 +218,83 @@ public final class RecentView: NSView {
             ownerPID: tracked.pid,
             title: tracked.windowTitle,
             bounds: .zero,
-            state: .normal  // MRU doesn't track state; focus logic re-detects
+            state: .normal
         )
     }
 }
 
-// MARK: - RecentRowView
+// MARK: - RecentCardView
 
-/// A single row in the RecentView list.
-final class RecentRowView: NSView {
+/// A single card in the grid. Screenshot on top, info below.
+final class RecentCardView: NSView {
 
     var onClicked: ((Int) -> Void)?
     var onDoubleClicked: ((Int) -> Void)?
 
     private let index: Int
     private let thumbnailView = NSImageView()
+    private let infoStack = NSStackView()
+    private let appLine = NSStackView()
     private let appIconView = NSImageView()
     private let appNameLabel = NSTextField(labelWithString: "")
     private let titleLabel = NSTextField(labelWithString: "")
     private let metaLabel = NSTextField(labelWithString: "")
-    private let highlightView = NSView()
 
     init(tracked: TrackedWindow, thumbnail: CGImage?, index: Int) {
         self.index = index
         super.init(frame: .zero)
-        translatesAutoresizingMaskIntoConstraints = false
-        heightAnchor.constraint(equalToConstant: 72).isActive = true
 
-        // Highlight background
-        highlightView.translatesAutoresizingMaskIntoConstraints = false
-        highlightView.wantsLayer = true
-        highlightView.layer?.cornerRadius = 6
-        highlightView.isHidden = true
-        addSubview(highlightView)
+        wantsLayer = true
+        layer?.cornerRadius = 8
+        layer?.cornerCurve = .continuous
+        layer?.borderWidth = 1
+        layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.3).cgColor
 
         // Thumbnail
-        thumbnailView.translatesAutoresizingMaskIntoConstraints = false
         thumbnailView.imageScaling = .scaleProportionallyUpOrDown
         thumbnailView.wantsLayer = true
-        thumbnailView.layer?.cornerRadius = 4
+        thumbnailView.layer?.maskedCorners = [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
+        thumbnailView.layer?.cornerRadius = 8
         thumbnailView.layer?.masksToBounds = true
-        thumbnailView.layer?.borderWidth = 0.5
-        thumbnailView.layer?.borderColor = NSColor.separatorColor.cgColor
         if let thumbnail {
-            thumbnailView.image = NSImage(cgImage: thumbnail, size: NSSize(width: 120, height: 75))
+            thumbnailView.image = NSImage(cgImage: thumbnail, size: .zero)
         } else {
             thumbnailView.image = NSImage(systemSymbolName: "macwindow", accessibilityDescription: nil)
             thumbnailView.contentTintColor = .tertiaryLabelColor
+            thumbnailView.imageScaling = .scaleNone
         }
         addSubview(thumbnailView)
 
-        // App icon
-        appIconView.translatesAutoresizingMaskIntoConstraints = false
+        // App icon + name line
         appIconView.imageScaling = .scaleProportionallyDown
         if let app = NSRunningApplication(processIdentifier: tracked.pid) {
             appIconView.image = app.icon
         }
-        addSubview(appIconView)
 
-        // App name
-        appNameLabel.translatesAutoresizingMaskIntoConstraints = false
         appNameLabel.stringValue = tracked.appName
         appNameLabel.textColor = .secondaryLabelColor
-        appNameLabel.font = .systemFont(ofSize: 11)
+        appNameLabel.font = .systemFont(ofSize: 10)
         appNameLabel.lineBreakMode = .byTruncatingTail
-        addSubview(appNameLabel)
+        appNameLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
         // Window title
-        titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.stringValue = tracked.windowTitle
-        titleLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        titleLabel.font = .systemFont(ofSize: 11, weight: .medium)
         titleLabel.lineBreakMode = .byTruncatingTail
-        addSubview(titleLabel)
 
-        // Meta (duration + ago)
-        metaLabel.translatesAutoresizingMaskIntoConstraints = false
-        metaLabel.stringValue = "\(tracked.durationText) total  ·  \(tracked.agoText)"
+        // Meta
+        metaLabel.stringValue = "\(tracked.durationText)  ·  \(tracked.agoText)"
         metaLabel.textColor = .tertiaryLabelColor
-        metaLabel.font = .systemFont(ofSize: 11)
+        metaLabel.font = .systemFont(ofSize: 10)
+
+        addSubview(appIconView)
+        addSubview(appNameLabel)
+        addSubview(titleLabel)
         addSubview(metaLabel)
 
-        NSLayoutConstraint.activate([
-            highlightView.topAnchor.constraint(equalTo: topAnchor, constant: 2),
-            highlightView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
-            highlightView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
-            highlightView.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),
-
-            thumbnailView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            thumbnailView.centerYAnchor.constraint(equalTo: centerYAnchor),
-            thumbnailView.widthAnchor.constraint(equalToConstant: 100),
-            thumbnailView.heightAnchor.constraint(equalToConstant: 56),
-
-            appIconView.leadingAnchor.constraint(equalTo: thumbnailView.trailingAnchor, constant: 10),
-            appIconView.topAnchor.constraint(equalTo: topAnchor, constant: 10),
-            appIconView.widthAnchor.constraint(equalToConstant: 16),
-            appIconView.heightAnchor.constraint(equalToConstant: 16),
-
-            appNameLabel.leadingAnchor.constraint(equalTo: appIconView.trailingAnchor, constant: 4),
-            appNameLabel.centerYAnchor.constraint(equalTo: appIconView.centerYAnchor),
-            appNameLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12),
-
-            titleLabel.leadingAnchor.constraint(equalTo: thumbnailView.trailingAnchor, constant: 10),
-            titleLabel.topAnchor.constraint(equalTo: appNameLabel.bottomAnchor, constant: 3),
-            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12),
-
-            metaLabel.leadingAnchor.constraint(equalTo: thumbnailView.trailingAnchor, constant: 10),
-            metaLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 3),
-            metaLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12),
-        ])
-
-        // Click gesture
+        // Gestures
         let click = NSClickGestureRecognizer(target: self, action: #selector(handleClick))
         addGestureRecognizer(click)
-
         let doubleClick = NSClickGestureRecognizer(target: self, action: #selector(handleDoubleClick))
         doubleClick.numberOfClicksRequired = 2
         addGestureRecognizer(doubleClick)
@@ -303,15 +303,30 @@ final class RecentRowView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    func updateLayout(thumbnailHeight: CGFloat) {
+        let w = bounds.width
+        thumbnailView.frame = NSRect(x: 0, y: bounds.height - thumbnailHeight,
+                                     width: w, height: thumbnailHeight)
+
+        let infoY = bounds.height - thumbnailHeight
+        let pad: CGFloat = 6
+
+        appIconView.frame = NSRect(x: pad, y: infoY - 16, width: 12, height: 12)
+        appNameLabel.frame = NSRect(x: pad + 15, y: infoY - 17, width: w - pad * 2 - 15, height: 14)
+        titleLabel.frame = NSRect(x: pad, y: infoY - 32, width: w - pad * 2, height: 15)
+        metaLabel.frame = NSRect(x: pad, y: infoY - 46, width: w - pad * 2, height: 14)
+    }
+
     func setSelected(_ selected: Bool) {
-        highlightView.isHidden = !selected
-        highlightView.layer?.backgroundColor = selected
-            ? NSColor.controlAccentColor.withAlphaComponent(0.15).cgColor
-            : nil
+        layer?.borderColor = selected
+            ? NSColor.controlAccentColor.cgColor
+            : NSColor.separatorColor.withAlphaComponent(0.3).cgColor
+        layer?.borderWidth = selected ? 2 : 1
     }
 
     func updateThumbnail(_ image: CGImage) {
-        thumbnailView.image = NSImage(cgImage: image, size: NSSize(width: 120, height: 75))
+        thumbnailView.image = NSImage(cgImage: image, size: .zero)
+        thumbnailView.imageScaling = .scaleProportionallyUpOrDown
     }
 
     @objc private func handleClick() { onClicked?(index) }

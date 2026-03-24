@@ -11,6 +11,7 @@ public struct TrackedWindow: Hashable, Identifiable {
     public var windowTitle: String
     public var lastFocusTime: Date
     public var totalDuration: TimeInterval
+    public var isFullScreen: Bool
 
     public var durationText: String {
         let minutes = Int(totalDuration) / 60
@@ -59,20 +60,27 @@ public final class WindowActivityTracker {
 
     /// Record that a window became the focused window.
     /// Stops the timer on the previous window, starts one on the new window.
+    /// Set `isTransient: true` to skip tracking (e.g., popups, notifications).
     public func windowDidFocus(
         windowID: UInt32,
         pid: Int32,
         appName: String,
         bundleIdentifier: String?,
-        windowTitle: String
+        windowTitle: String,
+        isFullScreen: Bool = false,
+        isTransient: Bool = false
     ) {
+        // Don't track transient windows (popups, "Build Succeeded", notifications)
+        if isTransient { return }
+
         // Stop timer on previous window
         snapshotActiveWindow()
 
         // Update or create entry for the new window
         if var entry = windows[windowID] {
             entry.lastFocusTime = Date()
-            entry.windowTitle = windowTitle  // title may have changed
+            entry.windowTitle = windowTitle
+            entry.isFullScreen = isFullScreen
             windows[windowID] = entry
         } else {
             windows[windowID] = TrackedWindow(
@@ -82,7 +90,8 @@ public final class WindowActivityTracker {
                 bundleIdentifier: bundleIdentifier,
                 windowTitle: windowTitle,
                 lastFocusTime: Date(),
-                totalDuration: 0
+                totalDuration: 0,
+                isFullScreen: isFullScreen
             )
         }
 

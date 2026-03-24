@@ -135,12 +135,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AXUIElementCopyAttributeValue(axWindow, kAXTitleAttribute as CFString, &titleRef)
         let title = (titleRef as? String) ?? appName
 
+        // Detect transient windows (popups, notifications, "Build Succeeded", etc.)
+        // Check AX subrole — transient windows are often AXDialog, AXFloatingWindow,
+        // AXSystemDialog, or have no subrole. Also check size: tiny windows are popups.
+        var subroleRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(axWindow, kAXSubroleAttribute as CFString, &subroleRef)
+        let subrole = subroleRef as? String ?? ""
+        let transientSubroles: Set<String> = [
+            "AXFloatingWindow", "AXSystemFloatingWindow", "AXSystemDialog"
+        ]
+        var isTransient = transientSubroles.contains(subrole)
+
+        // Also check window size via CGWindowList — tiny windows are likely transient
+        if !isTransient,
+           let windowList = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] {
+            for info in windowList {
+                guard let wid = info[kCGWindowNumber as String] as? CGWindowID,
+                      wid == windowID,
+                      let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
+                      let w = bounds["Width"], let h = bounds["Height"] else { continue }
+                // Windows smaller than 200x100 are likely transient popups
+                if w < 200 || h < 100 { isTransient = true }
+                break
+            }
+        }
+
+        // Check fullscreen state
+        var fsRef: CFTypeRef?
+        let isFullScreen = AXUIElementCopyAttributeValue(
+            axWindow, "AXFullScreen" as CFString, &fsRef
+        ) == .success && (fsRef as? Bool) == true
+
         tracker.windowDidFocus(
             windowID: windowID,
             pid: pid,
             appName: appName,
             bundleIdentifier: bundleID,
-            windowTitle: title
+            windowTitle: title,
+            isFullScreen: isFullScreen,
+            isTransient: isTransient
         )
     }
 

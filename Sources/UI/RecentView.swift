@@ -212,7 +212,7 @@ public final class RecentView: NSView {
             ownerPID: tracked.pid,
             title: tracked.windowTitle,
             bounds: .zero,
-            state: .normal
+            state: tracked.isFullScreen ? .fullScreen : .normal
         )
     }
 }

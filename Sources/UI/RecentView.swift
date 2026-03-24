@@ -21,7 +21,7 @@ public final class RecentView: NSView {
     // MARK: Subviews
 
     private let scrollView = NSScrollView()
-    private let containerView = NSView()
+    private let containerView = FlippedView()
 
     // MARK: State
 
@@ -151,8 +151,11 @@ public final class RecentView: NSView {
                 thumbnail: thumbnails[tracked.id],
                 index: index
             )
+            // Single click = activate (switch to that window)
             card.onClicked = { [weak self] idx in
-                self?.selectCard(at: idx)
+                guard let self, idx < self.trackedWindows.count else { return }
+                self.selectCard(at: idx)
+                self.onWindowActivated?(self.windowInfo(from: self.trackedWindows[idx]))
             }
             card.onDoubleClicked = { [weak self] idx in
                 guard let self, idx < self.trackedWindows.count else { return }
@@ -174,28 +177,19 @@ public final class RecentView: NSView {
         let thumbHeight = cardWidth * 0.6  // 5:3 aspect ratio
         let cardHeight = thumbHeight + 52  // thumbnail + info area
 
-        var y: CGFloat = cardPadding
-
+        // Flipped view: y=0 is top-left, increases downward
         for (index, card) in cardViews.enumerated() {
             let col = index % columns
+            let row = index / columns
             let x = cardPadding + CGFloat(col) * (cardWidth + cardSpacing)
+            let y = cardPadding + CGFloat(row) * (cardHeight + cardSpacing)
 
             card.frame = NSRect(x: x, y: y, width: cardWidth, height: cardHeight)
             card.updateLayout(thumbnailHeight: thumbHeight)
-
-            // Move to next row after last column
-            if col == columns - 1 {
-                y += cardHeight + cardSpacing
-            }
         }
 
-        // Handle last incomplete row
-        let lastCol = (cardViews.count - 1) % columns
-        if lastCol < columns - 1 {
-            y += cardHeight + cardSpacing
-        }
-
-        containerView.frame.size.height = y + cardPadding
+        let totalRows = (cardViews.count + columns - 1) / columns
+        containerView.frame.size.height = cardPadding * 2 + CGFloat(totalRows) * (cardHeight + cardSpacing) - cardSpacing
     }
 
     private func selectCard(at index: Int) {
@@ -303,18 +297,20 @@ final class RecentCardView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    override var isFlipped: Bool { true }
+
     func updateLayout(thumbnailHeight: CGFloat) {
         let w = bounds.width
-        thumbnailView.frame = NSRect(x: 0, y: bounds.height - thumbnailHeight,
-                                     width: w, height: thumbnailHeight)
-
-        let infoY = bounds.height - thumbnailHeight
         let pad: CGFloat = 6
 
-        appIconView.frame = NSRect(x: pad, y: infoY - 16, width: 12, height: 12)
-        appNameLabel.frame = NSRect(x: pad + 15, y: infoY - 17, width: w - pad * 2 - 15, height: 14)
-        titleLabel.frame = NSRect(x: pad, y: infoY - 32, width: w - pad * 2, height: 15)
-        metaLabel.frame = NSRect(x: pad, y: infoY - 46, width: w - pad * 2, height: 14)
+        // Flipped: y=0 is top. Thumbnail at top, info below.
+        thumbnailView.frame = NSRect(x: 0, y: 0, width: w, height: thumbnailHeight)
+
+        let infoTop = thumbnailHeight + 4
+        appIconView.frame = NSRect(x: pad, y: infoTop, width: 12, height: 12)
+        appNameLabel.frame = NSRect(x: pad + 15, y: infoTop - 1, width: w - pad * 2 - 15, height: 14)
+        titleLabel.frame = NSRect(x: pad, y: infoTop + 14, width: w - pad * 2, height: 15)
+        metaLabel.frame = NSRect(x: pad, y: infoTop + 29, width: w - pad * 2, height: 14)
     }
 
     func setSelected(_ selected: Bool) {
@@ -331,4 +327,12 @@ final class RecentCardView: NSView {
 
     @objc private func handleClick() { onClicked?(index) }
     @objc private func handleDoubleClick() { onDoubleClicked?(index) }
+}
+
+// MARK: - FlippedView
+
+/// NSView subclass with flipped coordinate system (y=0 at top).
+/// Used as the container in NSScrollView so cards lay out top-to-bottom.
+final class FlippedView: NSView {
+    override var isFlipped: Bool { true }
 }

@@ -13,8 +13,10 @@ public final class PilotPanel: NSPanel {
 
     // MARK: Subviews
 
+    private let tabBar = NSSegmentedControl()
     private let searchBar = SearchBar()
     private let treeView = TreeView()
+    private let recentView = RecentView()
     private let previewView = PreviewView()
     private let actionBar = ActionBar()
     private let splitView = NSSplitView()
@@ -26,6 +28,7 @@ public final class PilotPanel: NSPanel {
     private var appNodes: [AppNode] = []
     private var selectedWindow: WindowInfo?
     private var clickOutsideMonitor: Any?
+    private var showingRecent = false
 
     // MARK: Callbacks
 
@@ -97,16 +100,33 @@ public final class PilotPanel: NSPanel {
         treeView.reloadData(apps: apps)
     }
 
-    /// Show the panel with a new set of app nodes.
-    ///
-    /// - Parameter apps: The pre-enumerated application/window tree to display.
-    public func show(apps: [AppNode]) {
+    /// Show the panel. If recent data is available, show Recent tab; otherwise All Windows.
+    public func show(
+        apps: [AppNode],
+        recentWindows: [TrackedWindow] = [],
+        thumbnails: [UInt32: CGImage] = [:]
+    ) {
         appNodes = apps
         treeView.reloadData(apps: apps)
+
+        if !recentWindows.isEmpty {
+            recentView.reloadData(windows: recentWindows, thumbnails: thumbnails)
+            switchToTab(recent: true)
+        } else {
+            switchToTab(recent: false)
+        }
+
         centerOnCursorScreen()
         makeKeyAndOrderFront(nil)
-        searchBar.focusSearchField()
+        if !showingRecent {
+            searchBar.focusSearchField()
+        }
         startClickOutsideMonitor()
+    }
+
+    /// Update recent view thumbnails (called after background refresh).
+    public func updateRecentThumbnails(_ thumbnails: [UInt32: CGImage]) {
+        recentView.updateThumbnails(thumbnails)
     }
 
     /// Hide the panel without destroying it.
@@ -157,11 +177,22 @@ public final class PilotPanel: NSPanel {
     private func buildLayout() {
         guard let contentView else { return }
 
+        // --- Tab bar ---
+        tabBar.segmentCount = 2
+        tabBar.setLabel("Recent", forSegment: 0)
+        tabBar.setLabel("All Windows", forSegment: 1)
+        tabBar.segmentStyle = .texturedRounded
+        tabBar.selectedSegment = 1
+        tabBar.target = self
+        tabBar.action = #selector(tabChanged)
+        tabBar.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(tabBar)
+
         // --- Search bar ---
         searchBar.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(searchBar)
 
-        // --- Split view ---
+        // --- Split view (for All Windows mode) ---
         splitView.isVertical = true
         splitView.dividerStyle = .thin
         splitView.translatesAutoresizingMaskIntoConstraints = false
@@ -191,32 +222,58 @@ public final class PilotPanel: NSPanel {
         rightStack.addArrangedSubview(previewView)
         rightStack.addArrangedSubview(actionBar)
 
-        // Action bar has a fixed height
         actionBar.heightAnchor.constraint(equalToConstant: 44).isActive = true
 
-        // Add panes to split view
         splitView.addArrangedSubview(leftContainer)
         splitView.addArrangedSubview(rightStack)
 
-        // Hold the left pane at 280 px (NSSplitView constraint)
         leftContainer.widthAnchor.constraint(equalToConstant: 280).isActive = true
 
-        // ✅ FIX 3: topbarHeight = 0 because there is no title bar
-        let topbarHeight: CGFloat = 0
+        // --- Recent view (for Recent mode, replaces the split view) ---
+        recentView.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(recentView)
+        recentView.isHidden = true
 
         NSLayoutConstraint.activate([
-            // Search bar: sits at the very top
-            searchBar.topAnchor.constraint(equalTo: contentView.topAnchor, constant: topbarHeight),
+            // Tab bar at the very top
+            tabBar.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 8),
+            tabBar.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
+
+            // Search bar below tab bar
+            searchBar.topAnchor.constraint(equalTo: tabBar.bottomAnchor, constant: 4),
             searchBar.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             searchBar.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             searchBar.heightAnchor.constraint(equalToConstant: 40),
 
-            // Split view fills the rest
+            // Split view (All Windows mode)
             splitView.topAnchor.constraint(equalTo: searchBar.bottomAnchor),
             splitView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             splitView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             splitView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+
+            // Recent view (Recent mode) — same position as split view
+            recentView.topAnchor.constraint(equalTo: tabBar.bottomAnchor, constant: 4),
+            recentView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            recentView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            recentView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
         ])
+    }
+
+    @objc private func tabChanged() {
+        switchToTab(recent: tabBar.selectedSegment == 0)
+    }
+
+    private func switchToTab(recent: Bool) {
+        showingRecent = recent
+        tabBar.selectedSegment = recent ? 0 : 1
+
+        recentView.isHidden = !recent
+        splitView.isHidden = recent
+        searchBar.isHidden = recent
+
+        if !recent {
+            searchBar.focusSearchField()
+        }
     }
 
     private func wireCallbacks() {
@@ -237,6 +294,18 @@ public final class PilotPanel: NSPanel {
 
         // Tree activation → focus window
         treeView.onWindowActivated = { [weak self] windowInfo in
+            self?.selectedWindow = windowInfo
+            self?.onWindowActivated?(windowInfo)
+        }
+
+        // Recent view selection → load preview
+        recentView.onWindowSelected = { [weak self] windowInfo in
+            self?.selectedWindow = windowInfo
+            self?.onWindowSelected?(windowInfo)
+        }
+
+        // Recent view activation → focus window
+        recentView.onWindowActivated = { [weak self] windowInfo in
             self?.selectedWindow = windowInfo
             self?.onWindowActivated?(windowInfo)
         }

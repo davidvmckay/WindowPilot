@@ -13,8 +13,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let enumerator = WindowEnumerator()
     private let capture = WindowCapture()
     private let focuser = WindowFocuser()
+    private let tracker = WindowActivityTracker()
+    private let screenshotCache = ScreenshotCache()
 
     private var hasScreenRecording = false
+    private var workspaceObserver: Any?
 
     // MARK: - Lifecycle
 
@@ -25,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel = PilotPanel()
         panel.updateScreenRecordingPermission(hasScreenRecording)
         wirePanel()
+        startActivityTracking()
 
         hotkeyManager = HotkeyManager(onToggle: { [weak self] in
             self?.togglePanel()
@@ -44,9 +48,85 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showPanel() {
+        // Snapshot active window duration before reading data
+        tracker.recordDuration()
+
         let ownPID = Int32(ProcessInfo.processInfo.processIdentifier)
         let apps = enumerator.enumerate(excludingPID: ownPID)
-        panel.show(apps: apps)
+        let recent = tracker.combinedRanking(limit: 20)
+
+        // Gather cached thumbnails for recent windows
+        var thumbnails: [UInt32: CGImage] = [:]
+        for w in recent {
+            if let img = screenshotCache.image(forWindowID: w.id) {
+                thumbnails[w.id] = img
+            }
+        }
+
+        panel.show(apps: apps, recentWindows: recent, thumbnails: thumbnails)
+
+        // Background refresh thumbnails for top 6
+        if hasScreenRecording {
+            let topIDs = Array(recent.prefix(6).map { $0.id })
+            screenshotCache.refreshAsync(
+                windowIDs: topIDs,
+                capture: { [weak self] wid in self?.capture.capture(windowID: wid) }
+            ) { [weak self] refreshed in
+                self?.panel.updateRecentThumbnails(refreshed)
+            }
+        }
+    }
+
+    // MARK: - Activity Tracking
+
+    private func startActivityTracking() {
+        workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.trackFocusedWindow()
+        }
+        // Track the currently focused window at launch
+        trackFocusedWindow()
+    }
+
+    private func trackFocusedWindow() {
+        guard let frontApp = NSWorkspace.shared.frontmostApplication else { return }
+        let pid = frontApp.processIdentifier
+
+        // Skip our own app
+        if pid == Int32(ProcessInfo.processInfo.processIdentifier) { return }
+
+        let appName = frontApp.localizedName ?? "Unknown"
+        let bundleID = frontApp.bundleIdentifier
+
+        // Get the focused window via AX
+        let appElement = AXUIElementCreateApplication(pid)
+        var focusedRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &focusedRef) == .success,
+              let focusedWindow = focusedRef else { return }
+
+        // Get window ID
+        let axWindow = focusedWindow as! AXUIElement
+        var windowID: CGWindowID = 0
+        let getWindowFunc = unsafeBitCast(
+            dlsym(dlopen(nil, RTLD_LAZY), "_AXUIElementGetWindow"),
+            to: (@convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError).self
+        )
+        guard getWindowFunc(axWindow, &windowID) == .success, windowID != 0 else { return }
+
+        // Get window title
+        var titleRef: CFTypeRef?
+        AXUIElementCopyAttributeValue(axWindow, kAXTitleAttribute as CFString, &titleRef)
+        let title = (titleRef as? String) ?? appName
+
+        tracker.windowDidFocus(
+            windowID: windowID,
+            pid: pid,
+            appName: appName,
+            bundleIdentifier: bundleID,
+            windowTitle: title
+        )
     }
 
     // MARK: - Panel Wiring
@@ -56,6 +136,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self, self.hasScreenRecording else { return }
             let image = self.capture.capture(windowID: windowInfo.id)
             self.panel.showPreview(image: image)
+            // Cache for MRU thumbnails
+            if let image {
+                self.screenshotCache.cache(image: image, forWindowID: windowInfo.id)
+            }
         }
 
         // Focus strategy (v6):

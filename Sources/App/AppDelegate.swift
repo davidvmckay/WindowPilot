@@ -115,10 +115,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ))
         }
 
-        // Remaining windows (not in MRU)
+        // Remaining windows (not in MRU), filtered for transient windows
         for app in allApps {
             for window in app.windows {
                 guard !mruIDs.contains(window.id) else { continue }
+                guard !isTransientWindow(pid: window.ownerPID, windowID: window.id) else { continue }
                 items.append(CarouselItem(
                     windowID: window.id, pid: window.ownerPID,
                     appName: app.name, windowTitle: window.title,
@@ -155,6 +156,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.performFocus(windowInfo)
             }
         }
+    }
+
+    // MARK: - Transient Window Detection
+
+    /// Check if a window is transient (popup, notification, overlay).
+    /// Uses AX: no close button or transient subrole.
+    private func isTransientWindow(pid: Int32, windowID: UInt32) -> Bool {
+        let appElement = AXUIElementCreateApplication(pid)
+        var windowsRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+              let axWindows = windowsRef as? [AXUIElement] else { return false }
+
+        // Find the AX window matching this ID
+        let getWindowFunc = unsafeBitCast(
+            dlsym(dlopen(nil, RTLD_LAZY), "_AXUIElementGetWindow"),
+            to: (@convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError).self
+        )
+        for axWindow in axWindows {
+            var wid: CGWindowID = 0
+            guard getWindowFunc(axWindow, &wid) == .success, wid == windowID else { continue }
+
+            // Check subrole
+            var subroleRef: CFTypeRef?
+            AXUIElementCopyAttributeValue(axWindow, kAXSubroleAttribute as CFString, &subroleRef)
+            let subrole = subroleRef as? String ?? ""
+            if ["AXFloatingWindow", "AXSystemFloatingWindow", "AXSystemDialog"].contains(subrole) {
+                return true
+            }
+
+            // No close button → transient
+            var closeRef: CFTypeRef?
+            if AXUIElementCopyAttributeValue(axWindow, kAXCloseButtonAttribute as CFString, &closeRef) != .success {
+                return true
+            }
+
+            return false
+        }
+        return false
     }
 
     // MARK: - Activity Tracking

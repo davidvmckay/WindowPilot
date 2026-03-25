@@ -21,6 +21,7 @@ public final class CarouselPanel: NSPanel {
     private var selectedIndex: Int = 0
     private var cardViews: [CarouselCardView] = []
     private var flagsMonitor: Any?
+    private var localFlagsMonitor: Any?
 
     // MARK: Subviews
 
@@ -203,14 +204,27 @@ public final class CarouselPanel: NSPanel {
 
     private func startModifierMonitor() {
         stopModifierMonitor()
+
+        let required: NSEvent.ModifierFlags = [.control, .option]
+
+        // Global monitor — catches events when other apps are active
         flagsMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
             guard let self, self.isVisible else { return }
-            // Check if Ctrl+Option are still held
-            let required: NSEvent.ModifierFlags = [.control, .option]
-            if !event.modifierFlags.contains(required) {
-                // Modifiers released — activate selected window
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            if !flags.contains(required) {
                 self.activateSelected()
             }
+        }
+
+        // Local monitor — catches events when our panel is key
+        // (nonactivatingPanel can still receive some events locally)
+        localFlagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            guard let self, self.isVisible else { return event }
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            if !flags.contains(required) {
+                self.activateSelected()
+            }
+            return event
         }
     }
 
@@ -218,6 +232,10 @@ public final class CarouselPanel: NSPanel {
         if let monitor = flagsMonitor {
             NSEvent.removeMonitor(monitor)
             flagsMonitor = nil
+        }
+        if let monitor = localFlagsMonitor {
+            NSEvent.removeMonitor(monitor)
+            localFlagsMonitor = nil
         }
     }
 

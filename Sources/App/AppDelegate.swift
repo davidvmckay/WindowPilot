@@ -128,6 +128,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         guard !items.isEmpty else { return }
+
+        // Capture screenshots for items that don't have cached thumbnails
+        if hasScreenRecording {
+            for i in items.indices {
+                if items[i].thumbnail == nil {
+                    if let img = capture.capture(windowID: items[i].windowID) {
+                        screenshotCache.cache(image: img, forWindowID: items[i].windowID)
+                        items[i] = CarouselItem(
+                            windowID: items[i].windowID, pid: items[i].pid,
+                            appName: items[i].appName, windowTitle: items[i].windowTitle,
+                            thumbnail: img
+                        )
+                    }
+                }
+            }
+        }
+
         carousel.show(items: items)
     }
 

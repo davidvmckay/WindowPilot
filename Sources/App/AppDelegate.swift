@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var hotkeyManager: HotkeyManager!
     private var panel: PilotPanel!
+    private var carousel: CarouselPanel!
 
     private let enumerator = WindowEnumerator()
     private let capture = WindowCapture()
@@ -30,11 +31,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel = PilotPanel()
         panel.updateScreenRecordingPermission(hasScreenRecording)
         wirePanel()
+
+        carousel = CarouselPanel()
+        wireCarousel()
+
         startActivityTracking()
 
-        hotkeyManager = HotkeyManager(onToggle: { [weak self] in
-            self?.togglePanel()
-        })
+        hotkeyManager = HotkeyManager(
+            onToggle: { [weak self] in self?.togglePanel() },
+            onCarousel: { [weak self] in self?.showCarousel() }
+        )
 
         setupStatusItem()
     }
@@ -75,6 +81,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 capture: { [weak self] wid in self?.capture.capture(windowID: wid) }
             ) { [weak self] refreshed in
                 self?.panel.updateRecentThumbnails(refreshed)
+            }
+        }
+    }
+
+    // MARK: - Carousel
+
+    private func showCarousel() {
+        if carousel.isVisible {
+            carousel.dismiss()
+            return
+        }
+        // Dismiss panel if open
+        if panel.isVisible { panel.dismiss() }
+
+        tracker.recordDuration()
+
+        let ownPID = Int32(ProcessInfo.processInfo.processIdentifier)
+        let allApps = enumerator.enumerate(excludingPID: ownPID)
+
+        // Build carousel items: MRU first, then remaining windows
+        let mruWindows = tracker.combinedRanking(limit: 100)
+        let mruIDs = Set(mruWindows.map { $0.id })
+
+        var items: [CarouselItem] = []
+
+        // MRU windows first
+        for tracked in mruWindows {
+            items.append(CarouselItem(
+                windowID: tracked.id, pid: tracked.pid,
+                appName: tracked.appName, windowTitle: tracked.windowTitle,
+                thumbnail: screenshotCache.image(forWindowID: tracked.id)
+            ))
+        }
+
+        // Remaining windows (not in MRU)
+        for app in allApps {
+            for window in app.windows {
+                guard !mruIDs.contains(window.id) else { continue }
+                items.append(CarouselItem(
+                    windowID: window.id, pid: window.ownerPID,
+                    appName: app.name, windowTitle: window.title,
+                    thumbnail: screenshotCache.image(forWindowID: window.id)
+                ))
+            }
+        }
+
+        guard !items.isEmpty else { return }
+        carousel.show(items: items)
+    }
+
+    private func wireCarousel() {
+        carousel.onWindowActivated = { [weak self] windowInfo in
+            guard let self else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                self.performFocus(windowInfo)
             }
         }
     }

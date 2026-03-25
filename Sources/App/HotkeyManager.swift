@@ -1,26 +1,33 @@
 import AppKit
 import HotKey
 
-/// Registers and manages the global Option+Space hotkey.
-/// The caller provides an `onToggle` closure that is invoked on every key-down
-/// event — it is responsible for showing or hiding the panel.
-///
-/// The `HotKey` object MUST be kept alive for as long as the hotkey should
-/// remain active.  Storing it as a `var` property on this class satisfies
-/// that requirement.
+/// Registers and manages global hotkeys.
+/// - Option+Space: toggle the main panel
+/// - Ctrl+Option+Space: show the carousel (hold-to-browse)
 final class HotkeyManager {
-    private var hotKey: HotKey?
-    private let onToggle: () -> Void
+    private var panelHotKey: HotKey?
+    private var carouselHotKey: HotKey?
 
-    init(onToggle: @escaping () -> Void) {
+    private let onToggle: () -> Void
+    private let onCarousel: () -> Void
+
+    init(onToggle: @escaping () -> Void, onCarousel: @escaping () -> Void) {
         self.onToggle = onToggle
-        setupHotkey()
+        self.onCarousel = onCarousel
+        setupHotkeys()
     }
 
-    private func setupHotkey() {
-        hotKey = HotKey(key: .space, modifiers: [.option])
-        hotKey?.keyDownHandler = { [weak self] in
+    private func setupHotkeys() {
+        // Option+Space → toggle panel
+        panelHotKey = HotKey(key: .space, modifiers: [.option])
+        panelHotKey?.keyDownHandler = { [weak self] in
             self?.onToggle()
+        }
+
+        // Ctrl+Option+Space → show carousel
+        carouselHotKey = HotKey(key: .space, modifiers: [.control, .option])
+        carouselHotKey?.keyDownHandler = { [weak self] in
+            self?.onCarousel()
         }
     }
 }

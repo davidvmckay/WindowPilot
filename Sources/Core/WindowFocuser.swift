@@ -410,7 +410,7 @@ public final class WindowFocuser: WindowFocusing {
         // Debug: log all AX windows to understand what's available
         for (i, w) in axWindows.enumerated() {
             var wid: CGWindowID = 0
-            Self._AXUIElementGetWindow(w, &wid)
+            Self._getWindow(w, &wid)
             var titleRef: CFTypeRef?
             AXUIElementCopyAttributeValue(w, kAXTitleAttribute as CFString, &titleRef)
             var fsRef: CFTypeRef?
@@ -574,15 +574,19 @@ public final class WindowFocuser: WindowFocusing {
 
     // MARK: - AX helpers
 
-    @_silgen_name("_AXUIElementGetWindow") @discardableResult
-    private static func _AXUIElementGetWindow(_ el: AXUIElement, _ wid: UnsafeMutablePointer<CGWindowID>) -> AXError
+    private static let _getWindow: @convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError = {
+        unsafeBitCast(
+            dlsym(dlopen(nil, RTLD_LAZY), "_AXUIElementGetWindow"),
+            to: (@convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError).self
+        )
+    }()
 
     /// Match AX window by CGWindowID — reliable even when multiple windows share titles.
     private func findWindowByID(_ targetID: UInt32, in windows: [AXUIElement]) -> AXUIElement? {
         guard targetID != 0 else { return nil }
         for window in windows {
             var wid: CGWindowID = 0
-            if Self._AXUIElementGetWindow(window, &wid) == .success, wid == targetID {
+            if Self._getWindow(window, &wid) == .success, wid == targetID {
                 return window
             }
         }

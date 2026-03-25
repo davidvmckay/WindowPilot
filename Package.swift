@@ -19,6 +19,11 @@ let package = Package(
             ],
             path: "Sources/App"
         ),
+        .executableTarget(
+            name: "windowpilot-cli",
+            dependencies: ["WindowPilotCore"],
+            path: "Sources/CLI"
+        ),
         .target(
             name: "WindowPilotCore",
             dependencies: [],

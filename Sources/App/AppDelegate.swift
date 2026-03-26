@@ -43,6 +43,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
 
         setupStatusItem()
+        offerCLIInstallation()
+    }
+
+    // MARK: - CLI Installation
+
+    private func offerCLIInstallation() {
+        let cliDest = "/usr/local/bin/windowpilot-cli"
+
+        // Skip if already installed
+        if FileManager.default.fileExists(atPath: cliDest) { return }
+
+        // Find CLI binary inside our app bundle
+        guard let bundlePath = Bundle.main.executableURL?.deletingLastPathComponent()
+            .appendingPathComponent("windowpilot-cli").path,
+              FileManager.default.fileExists(atPath: bundlePath) else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "Install Command-Line Tool?"
+        alert.informativeText = "WindowPilot includes a CLI tool for switching windows from the terminal.\n\nInstall \"windowpilot-cli\" to /usr/local/bin?\n(Requires administrator password)"
+        alert.addButton(withTitle: "Install")
+        alert.addButton(withTitle: "Skip")
+        alert.alertStyle = .informational
+
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        // Use osascript with admin privileges to create a symlink
+        let script = """
+            do shell script "mkdir -p /usr/local/bin && ln -sf \\\"\(bundlePath)\\\" \\\"\(cliDest)\\\"" with administrator privileges
+        """
+        if let appleScript = NSAppleScript(source: script) {
+            var error: NSDictionary?
+            appleScript.executeAndReturnError(&error)
+            if let error {
+                let errAlert = NSAlert()
+                errAlert.messageText = "CLI Installation Failed"
+                errAlert.informativeText = error["NSAppleScriptErrorMessage"] as? String ?? "Unknown error"
+                errAlert.runModal()
+            }
+        }
     }
 
     // MARK: - Panel Toggle

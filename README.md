@@ -16,7 +16,7 @@ swift build -c release
 
 On first launch, macOS will prompt for **Accessibility** permission. Grant it in System Settings → Privacy & Security → Accessibility. **Screen Recording** permission is optional (enables window screenshot previews).
 
-> **Note:** Not yet code-signed. First launch: right-click → Open, or allow in System Settings → Privacy & Security.
+> Signed with Developer ID and notarized by Apple.
 
 ## Usage
 

@@ -21,6 +21,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var workspaceObserver: Any?
     private var trackingTimer: Timer?
     private var lastTrackedWindowID: UInt32 = 0
+    private var preferencesWindow: PreferencesWindow?
+    private var navigatorMenuItem: NSMenuItem!
+    private var carouselMenuItem: NSMenuItem!
 
     // MARK: - Lifecycle
 
@@ -100,7 +103,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let ownPID = Int32(ProcessInfo.processInfo.processIdentifier)
         let apps = enumerator.enumerate(excludingPID: ownPID)
-        let recent = tracker.combinedRanking(limit: 20)
+        let liveIDs = Set(apps.flatMap { $0.windows.map { $0.id } })
+        let recent = tracker.combinedRanking(limit: 20).filter { liveIDs.contains($0.id) }
 
         // Gather cached thumbnails for recent windows
         var thumbnails: [UInt32: CGImage] = [:]
@@ -140,7 +144,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let allApps = enumerator.enumerate(excludingPID: ownPID)
 
         // Build carousel items: MRU first, then remaining windows
-        let mruWindows = tracker.combinedRanking(limit: 100)
+        let allLiveIDs = Set(allApps.flatMap { $0.windows.map { $0.id } })
+        let mruWindows = tracker.combinedRanking(limit: 100).filter { allLiveIDs.contains($0.id) }
         let mruIDs = Set(mruWindows.map { $0.id })
 
         var items: [CarouselItem] = []
@@ -524,7 +529,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let menu = NSMenu()
-        menu.addItem(withTitle: "Show WindowPilot (⌥Space)", action: #selector(showAction), keyEquivalent: "")
+        navigatorMenuItem = menu.addItem(
+            withTitle: "Show Navigator (\(hotkeyManager.panelShortcutDisplay))",
+            action: #selector(showAction), keyEquivalent: ""
+        )
+        carouselMenuItem = menu.addItem(
+            withTitle: "Show Carousel (\(hotkeyManager.carouselShortcutDisplay))",
+            action: #selector(carouselAction), keyEquivalent: ""
+        )
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Change Shortcuts…", action: #selector(showPreferences), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit", action: #selector(quitAction), keyEquivalent: "q")
 
@@ -533,10 +547,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         statusItem.menu = menu
+
+        hotkeyManager.onShortcutsChanged = { [weak self] in
+            self?.updateMenuShortcuts()
+        }
+    }
+
+    private func updateMenuShortcuts() {
+        navigatorMenuItem?.title = "Show Navigator (\(hotkeyManager.panelShortcutDisplay))"
+        carouselMenuItem?.title = "Show Carousel (\(hotkeyManager.carouselShortcutDisplay))"
     }
 
     @objc private func showAction() {
         showPanel()
+    }
+
+    @objc private func carouselAction() {
+        showCarousel()
+    }
+
+    @objc private func showPreferences() {
+        if preferencesWindow == nil {
+            preferencesWindow = PreferencesWindow(hotkeyManager: hotkeyManager)
+        }
+        preferencesWindow?.showWindow()
     }
 
     @objc private func quitAction() {

@@ -540,6 +540,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         menu.addItem(withTitle: "Change Shortcuts…", action: #selector(showPreferences), keyEquivalent: "")
         menu.addItem(.separator())
+        menu.addItem(withTitle: "About WindowPilot", action: #selector(showAbout), keyEquivalent: "")
+        menu.addItem(.separator())
         menu.addItem(withTitle: "Quit", action: #selector(quitAction), keyEquivalent: "q")
 
         for item in menu.items where item.action != nil {
@@ -571,6 +573,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             preferencesWindow = PreferencesWindow(hotkeyManager: hotkeyManager)
         }
         preferencesWindow?.showWindow()
+    }
+
+    @objc private func showAbout() {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.1.0"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? version
+
+        let alert = NSAlert()
+        alert.messageText = "WindowPilot"
+        alert.informativeText = """
+            Version \(version) (\(build))
+
+            A macOS-native hotkey window navigator.
+            See-and-pick your windows instantly.
+
+            by Ethan Zhou
+            © 2026 WindowPilot
+            """
+        alert.alertStyle = .informational
+
+        if let icon = NSImage(named: "AppIcon") ?? NSApp.applicationIconImage {
+            alert.icon = icon
+        }
+
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     @objc private func quitAction() {

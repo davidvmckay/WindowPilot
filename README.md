@@ -4,6 +4,8 @@
 
 Cmd+Tab switches apps, not windows. Mission Control is slow. WindowPilot gives you instant, window-level switching across all Spaces — including full-screen.
 
+![WindowPilot Demo](docs/windowpilot-demo.gif)
+
 ## Install
 
 Download the latest DMG from [Releases](https://github.com/ethannortharc/WindowPilot/releases), or build from source:

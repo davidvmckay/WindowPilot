@@ -22,6 +22,14 @@ public final class WindowEnumerator: WindowEnumerating {
 
     private static let minDimension: CGFloat = 50
 
+    /// macOS system processes that create layer-0 windows but can't be focused.
+    private static let blockedNames: Set<String> = [
+        "AuthenticationServicesHelper",
+        "universalAccessAuthWarn",
+        "SharedWebCredentialViewService",
+        "AccountAuthenticationDialog",
+    ]
+
     public func enumerate(excludingPID: Int32?) -> [AppNode] {
         let displays = Self.getDisplayBounds()
 
@@ -90,7 +98,11 @@ public final class WindowEnumerator: WindowEnumerating {
     @_silgen_name("_AXUIElementGetWindow") @discardableResult
     private static func _AXUIElementGetWindow(_ el: AXUIElement, _ wid: UnsafeMutablePointer<CGWindowID>) -> AXError
 
-    /// Check off-screen windows for kAXMinimizedAttribute and update their tags.
+    /// Check off-screen windows via Accessibility API:
+    /// - Tag minimized windows with "○"
+    /// - Tag ghost windows (CG window exists but no AX window) with "✕"
+    ///   Ghost windows are internal rendering surfaces (e.g. Ghostty zellij tabs)
+    ///   that can't be focused.
     private static func detectMinimized(_ entries: inout [(entry: [String: Any], tag: String)]) {
         // Collect PIDs that have untagged off-screen windows (candidates for minimized)
         var candidatesByPID: [Int32: [Int]] = [:]  // pid → indices in entries
@@ -108,14 +120,17 @@ public final class WindowEnumerator: WindowEnumerating {
             guard AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef) == .success,
                   let axWindows = windowsRef as? [AXUIElement] else { continue }
 
-            // Build a set of minimized CGWindowIDs for this app
+            // Build sets of all AX window IDs and minimized IDs
+            var allAXIDs = Set<UInt32>()
             var minimizedIDs = Set<UInt32>()
             for axWindow in axWindows {
-                var isMin: CFTypeRef?
-                guard AXUIElementCopyAttributeValue(axWindow, kAXMinimizedAttribute as CFString, &isMin) == .success,
-                      (isMin as? Bool) == true else { continue }
                 var wid: CGWindowID = 0
-                if _AXUIElementGetWindow(axWindow, &wid) == .success {
+                guard _AXUIElementGetWindow(axWindow, &wid) == .success else { continue }
+                allAXIDs.insert(wid)
+
+                var isMin: CFTypeRef?
+                if AXUIElementCopyAttributeValue(axWindow, kAXMinimizedAttribute as CFString, &isMin) == .success,
+                   (isMin as? Bool) == true {
                     minimizedIDs.insert(wid)
                 }
             }
@@ -125,6 +140,8 @@ public final class WindowEnumerator: WindowEnumerating {
                 let wid = windowID(from: entries[i].entry)
                 if minimizedIDs.contains(wid) {
                     entries[i].tag = "○"
+                } else if !allAXIDs.contains(wid) {
+                    entries[i].tag = "✕"  // ghost window — no AX representation
                 }
             }
         }
@@ -159,6 +176,12 @@ public final class WindowEnumerator: WindowEnumerating {
               rect.width >= minDimension && rect.height >= minDimension else {
             return false
         }
+
+        // Filter system helper processes that create unfocusable windows
+        if let name = entry[kOwnerName] as? String, blockedNames.contains(name) {
+            return false
+        }
+
         return true
     }
 
@@ -182,7 +205,7 @@ public final class WindowEnumerator: WindowEnumerating {
     private static func buildAppNodes(from entries: [(entry: [String: Any], tag: String)]) -> [AppNode] {
         var byPID: [Int32: (name: String, windows: [WindowInfo])] = [:]
 
-        for (entry, tag) in entries {
+        for (entry, tag) in entries where tag != "✕" {
             let pid = entry[kOwnerPID] as? Int32 ?? -1
             let ownerName = entry[kOwnerName] as? String ?? "Unknown"
             let windowName = entry[kWindowName] as? String

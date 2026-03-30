@@ -116,9 +116,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         panel.show(apps: apps, recentWindows: recent, thumbnails: thumbnails)
 
-        // Background refresh thumbnails for top 6
+        // Background refresh thumbnails for top 6 (skip minimized — use cached)
         if hasScreenRecording {
-            let topIDs = Array(recent.prefix(6).map { $0.id })
+            let minimizedIDs = Set(apps.flatMap { $0.windows.filter { $0.state == .minimized }.map { $0.id } })
+            let topIDs = Array(recent.prefix(6).map { $0.id }.filter { !minimizedIDs.contains($0) })
             screenshotCache.refreshAsync(
                 windowIDs: topIDs,
                 capture: { [weak self] wid in self?.capture.capture(windowID: wid) }
@@ -175,9 +176,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !items.isEmpty else { return }
 
         // Capture screenshots for items that don't have cached thumbnails
+        // Skip minimized windows — they produce tiny dock thumbnails
         if hasScreenRecording {
+            let minimizedIDs = Set(allApps.flatMap { $0.windows.filter { $0.state == .minimized }.map { $0.id } })
             for i in items.indices {
-                if items[i].thumbnail == nil {
+                if items[i].thumbnail == nil && !minimizedIDs.contains(items[i].windowID) {
                     if let img = capture.capture(windowID: items[i].windowID) {
                         screenshotCache.cache(image: img, forWindowID: items[i].windowID)
                         items[i] = CarouselItem(
@@ -351,9 +354,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func wirePanel() {
         panel.onWindowSelected = { [weak self] windowInfo in
             guard let self, self.hasScreenRecording else { return }
+            // Minimized windows produce tiny dock thumbnails — use cached screenshot
+            if windowInfo.state == .minimized,
+               let cached = self.screenshotCache.image(forWindowID: windowInfo.id) {
+                self.panel.showPreview(image: cached)
+                return
+            }
             let image = self.capture.capture(windowID: windowInfo.id)
             self.panel.showPreview(image: image)
-            // Cache for MRU thumbnails
             if let image {
                 self.screenshotCache.cache(image: image, forWindowID: windowInfo.id)
             }

@@ -20,7 +20,7 @@ public class PreviewView: NSView {
 
     private let imageView: NSImageView = {
         let iv = NSImageView()
-        iv.imageScaling = .scaleProportionallyDown
+        iv.imageScaling = .scaleProportionallyUpOrDown
         iv.imageAlignment = .alignCenter
         iv.translatesAutoresizingMaskIntoConstraints = false
         iv.wantsLayer = true

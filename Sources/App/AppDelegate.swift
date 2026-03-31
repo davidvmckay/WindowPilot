@@ -361,6 +361,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
             let image = self.capture.capture(windowID: windowInfo.id)
+            // If new capture is much smaller than cached, prefer cached (window may be
+            // in transition — resizing, space switching, etc.)
+            if let image, let cached = self.screenshotCache.image(forWindowID: windowInfo.id) {
+                let newPixels = image.width * image.height
+                let cachedPixels = cached.width * cached.height
+                if newPixels < cachedPixels / 2 {
+                    self.panel.showPreview(image: cached)
+                    return
+                }
+            }
             self.panel.showPreview(image: image)
             if let image {
                 self.screenshotCache.cache(image: image, forWindowID: windowInfo.id)

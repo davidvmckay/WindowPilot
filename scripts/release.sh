@@ -24,16 +24,22 @@ PUBKEY="$(cat scripts/sparkle_public_key.txt)"
 # generate_appcast in non-interactive shells). Falls back to Keychain lookup.
 ED_KEY_FILE="${ED_KEY_FILE:-$HOME/.config/windowpilot/sparkle_ed25519_key}"
 
-# --- 0. Sparkle command-line tools (cached, version-matched to Package.resolved)
+# Never publish an un-notarized build.
+if [ "${SKIP_NOTARIZE:-0}" = "1" ] && [ "${DRY_RUN:-0}" != "1" ]; then
+  echo "SKIP_NOTARIZE=1 requires DRY_RUN=1 — un-notarized builds must not be published" >&2
+  exit 1
+fi
+
+# --- 1. Build (also materializes Package.resolved on a fresh clone)
+swift build -c release
+
+# --- 1b. Sparkle command-line tools (cached, version-matched to Package.resolved)
 SPARKLE_VERSION=$(python3 -c "import json;print([p for p in json.load(open('Package.resolved'))['pins'] if p['identity']=='sparkle'][0]['state']['version'])")
 TOOLS=".build/sparkle-dist/bin"
 if [ ! -x "$TOOLS/generate_appcast" ]; then
   mkdir -p .build/sparkle-dist
   curl -sL "https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-${SPARKLE_VERSION}.tar.xz" | tar -xJ -C .build/sparkle-dist
 fi
-
-# --- 1. Build
-swift build -c release
 
 # --- 2. Assemble bundle (updates the existing WindowPilot.app in place;
 #         Resources/ with the app icon is preserved)
@@ -109,13 +115,20 @@ else
     --maximum-deltas 0 -o appcast.xml "$ARCHIVE_DIR"
 fi
 
-# --- 8. Publish
+# --- 8. Publish. Order matters: the release (with the DMG asset) must exist
+#         BEFORE the appcast that points at it goes live, or Sparkle clients
+#         see a 404 enclosure.
 if [ "${DRY_RUN:-0}" != "1" ]; then
-  git add appcast.xml
-  git commit -m "Update appcast for v${VERSION}"
-  git push
+  BRANCH="$(git branch --show-current)"
+  if [ "$BRANCH" != "main" ]; then
+    echo "Refusing to publish from branch '$BRANCH' — the feed lives on main" >&2
+    exit 1
+  fi
   gh release create "v${VERSION}" "$DMG" --title "WindowPilot v${VERSION}" --generate-notes
+  git add appcast.xml
+  git commit -m "Update appcast for v${VERSION}" -- appcast.xml
+  git push origin HEAD:main
   echo "Released v${VERSION}."
 else
-  echo "DRY_RUN: skipped appcast commit and GitHub release. Artifacts: $DMG, appcast.xml"
+  echo "DRY_RUN: skipped GitHub release and appcast commit. Artifacts: $DMG, appcast.xml"
 fi

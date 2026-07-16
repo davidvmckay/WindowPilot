@@ -9,18 +9,21 @@ import CoreGraphics
 /// in the background when the panel opens.
 public final class ScreenshotCache {
 
+    private let lock = NSLock()
     private var cache: [UInt32: CGImage] = [:]
 
     public init() {}
 
     /// Store a screenshot for a window.
     public func cache(image: CGImage, forWindowID windowID: UInt32) {
+        lock.lock(); defer { lock.unlock() }
         cache[windowID] = image
     }
 
     /// Retrieve a cached screenshot.
     public func image(forWindowID windowID: UInt32) -> CGImage? {
-        cache[windowID]
+        lock.lock(); defer { lock.unlock() }
+        return cache[windowID]
     }
 
     /// Refresh screenshots for a list of window IDs in the background.
@@ -36,7 +39,9 @@ public final class ScreenshotCache {
             for wid in windowIDs {
                 if let image = capture(wid) {
                     results[wid] = image
+                    self.lock.lock()
                     self.cache[wid] = image
+                    self.lock.unlock()
                 }
             }
             DispatchQueue.main.async {
@@ -47,11 +52,13 @@ public final class ScreenshotCache {
 
     /// Remove a specific entry (e.g., when a window is closed).
     public func remove(windowID: UInt32) {
+        lock.lock(); defer { lock.unlock() }
         cache.removeValue(forKey: windowID)
     }
 
     /// Clear all cached screenshots.
     public func clearAll() {
+        lock.lock(); defer { lock.unlock() }
         cache.removeAll()
     }
 }

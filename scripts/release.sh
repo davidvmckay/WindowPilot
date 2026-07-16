@@ -124,7 +124,11 @@ if [ "${DRY_RUN:-0}" != "1" ]; then
     echo "Refusing to publish from branch '$BRANCH' — the feed lives on main" >&2
     exit 1
   fi
-  gh release create "v${VERSION}" "$DMG" --title "WindowPilot v${VERSION}" --generate-notes
+  # Push source FIRST — otherwise gh tags the remote's stale HEAD and the
+  # release changelog points at pre-release code.
+  git push origin HEAD:main
+  gh release create "v${VERSION}" "$DMG" --title "WindowPilot v${VERSION}" \
+    --generate-notes --target "$(git rev-parse HEAD)"
   git add appcast.xml
   git commit -m "Update appcast for v${VERSION}" -- appcast.xml
   git push origin HEAD:main

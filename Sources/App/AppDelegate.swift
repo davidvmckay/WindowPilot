@@ -178,25 +178,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard !items.isEmpty else { return }
 
-        // Capture screenshots for items that don't have cached thumbnails
-        // Skip minimized windows — they produce tiny dock thumbnails
+        // Show immediately with cached thumbnails/placeholders, then fill in
+        // missing screenshots in the background (same pattern as showPanel).
+        carousel.show(items: items)
+
         if hasScreenRecording {
             let minimizedIDs = Set(allApps.flatMap { $0.windows.filter { $0.state == .minimized }.map { $0.id } })
-            for i in items.indices {
-                if items[i].thumbnail == nil && !minimizedIDs.contains(items[i].windowID) {
-                    if let img = capture.capture(windowID: items[i].windowID) {
-                        screenshotCache.cache(image: img, forWindowID: items[i].windowID)
-                        items[i] = CarouselItem(
-                            windowID: items[i].windowID, pid: items[i].pid,
-                            appName: items[i].appName, windowTitle: items[i].windowTitle,
-                            thumbnail: img
-                        )
-                    }
-                }
+            let missingIDs = items
+                .filter { $0.thumbnail == nil && !minimizedIDs.contains($0.windowID) }
+                .map { $0.windowID }
+            screenshotCache.refreshAsync(
+                windowIDs: missingIDs,
+                capture: { [weak self] wid in self?.capture.capture(windowID: wid) }
+            ) { [weak self] refreshed in
+                guard let self, self.carousel.isVisible else { return }
+                self.carousel.updateThumbnails(refreshed)
             }
         }
-
-        carousel.show(items: items)
     }
 
     private func wireCarousel() {

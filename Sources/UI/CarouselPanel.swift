@@ -65,6 +65,19 @@ public final class CarouselPanel: NSPanel {
         orderOut(nil)
     }
 
+    /// Update thumbnails after a background refresh (windowID → image).
+    public func updateThumbnails(_ thumbnails: [UInt32: CGImage]) {
+        for (i, item) in windows.enumerated() {
+            guard let img = thumbnails[item.windowID], i < cardViews.count else { continue }
+            windows[i] = CarouselItem(
+                windowID: item.windowID, pid: item.pid,
+                appName: item.appName, windowTitle: item.windowTitle,
+                thumbnail: img
+            )
+            cardViews[i].updateThumbnail(img)
+        }
+    }
+
     // MARK: Keyboard
 
     public override func keyDown(with event: NSEvent) {
@@ -359,5 +372,10 @@ final class CarouselCardView: NSView {
         layer?.backgroundColor = selected
             ? NSColor.controlAccentColor.withAlphaComponent(0.1).cgColor
             : nil
+    }
+
+    func updateThumbnail(_ image: CGImage) {
+        thumbnailView.image = NSImage(cgImage: image, size: .zero)
+        thumbnailView.imageScaling = .scaleProportionallyUpOrDown
     }
 }

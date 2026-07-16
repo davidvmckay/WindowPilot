@@ -20,6 +20,9 @@ APP="WindowPilot.app"
 DMG="WindowPilot-${VERSION}.dmg"
 ARCHIVE_DIR="release-archive"
 PUBKEY="$(cat scripts/sparkle_public_key.txt)"
+# EdDSA private key: exported file (headless-friendly; Keychain ACL blocks
+# generate_appcast in non-interactive shells). Falls back to Keychain lookup.
+ED_KEY_FILE="${ED_KEY_FILE:-$HOME/.config/windowpilot/sparkle_ed25519_key}"
 
 # --- 0. Sparkle command-line tools (cached, version-matched to Package.resolved)
 SPARKLE_VERSION=$(python3 -c "import json;print([p for p in json.load(open('Package.resolved'))['pins'] if p['identity']=='sparkle'][0]['state']['version'])")
@@ -95,10 +98,16 @@ cp "$DMG" "$ARCHIVE_DIR/"
 if [ -n "$NOTES_HTML" ]; then
   cp "$NOTES_HTML" "$ARCHIVE_DIR/WindowPilot-${VERSION}.html"
 fi
-"$TOOLS/generate_appcast" \
-  --download-url-prefix "$DOWNLOAD_URL_PREFIX" \
-  --maximum-deltas 0 \
-  -o appcast.xml "$ARCHIVE_DIR"
+if [ -f "$ED_KEY_FILE" ]; then
+  "$TOOLS/generate_appcast" --ed-key-file "$ED_KEY_FILE" \
+    --download-url-prefix "$DOWNLOAD_URL_PREFIX" \
+    --maximum-deltas 0 -o appcast.xml "$ARCHIVE_DIR"
+else
+  # Keychain lookup — works in interactive shells where the ACL dialog can appear
+  "$TOOLS/generate_appcast" \
+    --download-url-prefix "$DOWNLOAD_URL_PREFIX" \
+    --maximum-deltas 0 -o appcast.xml "$ARCHIVE_DIR"
+fi
 
 # --- 8. Publish
 if [ "${DRY_RUN:-0}" != "1" ]; then

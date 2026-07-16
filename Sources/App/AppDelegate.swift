@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var workspaceObserver: Any?
     private var trackingTimer: Timer?
     private var lastTrackedWindowID: UInt32 = 0
+    private var cachedApps: [AppNode] = []
     private var preferencesWindow: PreferencesWindow?
     private var navigatorMenuItem: NSMenuItem!
     private var carouselMenuItem: NSMenuItem!
@@ -103,6 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let ownPID = Int32(ProcessInfo.processInfo.processIdentifier)
         let apps = enumerator.enumerate(excludingPID: ownPID)
+        cachedApps = apps
         let liveIDs = Set(apps.flatMap { $0.windows.map { $0.id } })
         let recent = tracker.combinedRanking(limit: 20).filter { liveIDs.contains($0.id) }
 
@@ -412,9 +414,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         panel.onSearchChanged = { [weak self] query in
             guard let self else { return }
-            let ownPID = Int32(ProcessInfo.processInfo.processIdentifier)
-            let allApps = self.enumerator.enumerate(excludingPID: ownPID)
-            let filtered = SearchFilter.filter(allApps, query: query)
+            // Filter the snapshot from showPanel() — never re-enumerate per keystroke
+            let filtered = SearchFilter.filter(self.cachedApps, query: query)
             self.panel.reloadTree(apps: filtered)
         }
 

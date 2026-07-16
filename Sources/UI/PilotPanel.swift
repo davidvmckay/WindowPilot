@@ -118,7 +118,10 @@ public final class PilotPanel: NSPanel {
 
         centerOnCursorScreen()
         makeKeyAndOrderFront(nil)
-        if !showingRecent {
+        if showingRecent {
+            makeFirstResponder(recentView)
+            recentView.selectInitialCard()
+        } else {
             searchBar.focusSearchField()
         }
         startClickOutsideMonitor()
@@ -271,7 +274,9 @@ public final class PilotPanel: NSPanel {
         splitView.isHidden = recent
         searchBar.isHidden = recent
 
-        if !recent {
+        if recent {
+            makeFirstResponder(recentView)
+        } else {
             searchBar.focusSearchField()
         }
     }

@@ -62,6 +62,14 @@ public final class RecentView: NSView {
         }
     }
 
+    /// Select the initial card for keyboard navigation. Index 0 is the window
+    /// that was focused when the panel opened, so preselect index 1 (the
+    /// "previous" window) when available — same logic as CarouselPanel.
+    public func selectInitialCard() {
+        guard !trackedWindows.isEmpty else { return }
+        selectCard(at: trackedWindows.count > 1 ? 1 : 0)
+    }
+
     // MARK: Keyboard
 
     public override var acceptsFirstResponder: Bool { true }

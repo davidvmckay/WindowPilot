@@ -27,3 +27,7 @@ Package.resolved
 
 # Worktrees
 windowpilot-fixes/
+
+# Release artifacts
+release-archive/
+*.dmg

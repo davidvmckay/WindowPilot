@@ -403,7 +403,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         panel.onWindowClose = { [weak self] windowInfo in
             guard let self else { return }
-            _ = self.focuser.close(pid: windowInfo.ownerPID, windowTitle: windowInfo.title)
+            if !self.focuser.close(pid: windowInfo.ownerPID, windowTitle: windowInfo.title) {
+                ToastHUD.show("Couldn't close \"\(windowInfo.title)\"")
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 self.showPanel()
             }
@@ -411,7 +413,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         panel.onWindowMinimize = { [weak self] windowInfo in
             guard let self else { return }
-            _ = self.focuser.minimize(pid: windowInfo.ownerPID, windowTitle: windowInfo.title)
+            if !self.focuser.minimize(pid: windowInfo.ownerPID, windowTitle: windowInfo.title) {
+                ToastHUD.show("Couldn't minimize \"\(windowInfo.title)\"")
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 self.showPanel()
             }
@@ -467,17 +471,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         print("[WP] Ctrl+Arrow didn't work, falling back to exitCurrentFullScreen")
                         _ = self.focuser.exitCurrentFullScreen()
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
-                            _ = self.focuser.focus(
+                            if !self.focuser.focus(
                                 pid: info.ownerPID, windowID: info.id,
                                 windowTitle: info.title, state: info.state
-                            )
+                            ) {
+                                ToastHUD.show("Couldn't focus \"\(info.title)\" — it may have closed")
+                            }
                         }
                     } else {
                         print("[WP] Ctrl+Arrow switched Space successfully")
-                        _ = self.focuser.focus(
+                        if !self.focuser.focus(
                             pid: info.ownerPID, windowID: info.id,
                             windowTitle: info.title, state: info.state
-                        )
+                        ) {
+                            ToastHUD.show("Couldn't focus \"\(info.title)\" — it may have closed")
+                        }
                         self.focuser.raiseWindow(
                             pid: info.ownerPID, windowID: info.id,
                             windowTitle: info.title
@@ -489,10 +497,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 print("[WP] fullscreen→normal: exiting full-screen (no nav info)")
                 _ = focuser.exitCurrentFullScreen()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
-                    _ = self.focuser.focus(
+                    if !self.focuser.focus(
                         pid: info.ownerPID, windowID: info.id,
                         windowTitle: info.title, state: info.state
-                    )
+                    ) {
+                        ToastHUD.show("Couldn't focus \"\(info.title)\" — it may have closed")
+                    }
                 }
             }
 
@@ -510,10 +520,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
-                _ = self.focuser.focus(
+                if !self.focuser.focus(
                     pid: info.ownerPID, windowID: info.id,
                     windowTitle: info.title, state: .normal
-                )
+                ) {
+                    ToastHUD.show("Couldn't focus \"\(info.title)\" — it may have closed")
+                }
                 self.focuser.raiseWindow(
                     pid: info.ownerPID, windowID: info.id,
                     windowTitle: info.title
@@ -529,10 +541,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         } else {
             // normal→normal
-            _ = focuser.focus(
+            if !focuser.focus(
                 pid: info.ownerPID, windowID: info.id,
                 windowTitle: info.title, state: info.state
-            )
+            ) {
+                ToastHUD.show("Couldn't focus \"\(info.title)\" — it may have closed")
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 self.focuser.raiseWindow(
                     pid: info.ownerPID, windowID: info.id,

@@ -83,40 +83,27 @@ public final class WindowFocuser: WindowFocusing {
             AXUIElementSetAttributeValue(axWindow, kAXMinimizedAttribute as CFString, false as CFTypeRef)
         }
 
-        if state == .fullScreen {
-            // Entering a full-screen Space: CGS → SkyLight → AX.
-            // All three layers are needed for the system to fully update
-            // (Space switch + front process + menu bar).
-            if windowID != 0 {
-                switchDisplayToWindowSpace(windowID: windowID)
-                var psn = ProcessSerialNumber()
-                GetProcessForPID(pid, &psn)
-                _SLPSSetFrontProcessWithOptions(&psn, windowID, 0x200)
-                makeKeyWindow(&psn, windowID: windowID)
-            }
-            AXUIElementSetAttributeValue(appElement, kAXFrontmostAttribute as CFString, true as CFTypeRef)
-            if let axWindow {
-                AXUIElementPerformAction(axWindow, kAXRaiseAction as CFString)
-            }
-        } else {
-            // Non-full-screen target: AppDelegate calls activate() first to exit
-            // any current full-screen Space, then calls focus() again. On the
-            // second call, CGS switches to the correct Space (activate may have
-            // landed on the wrong one if the app has multiple Spaces).
-            if windowID != 0 {
-                switchDisplayToWindowSpace(windowID: windowID)
-                var psn = ProcessSerialNumber()
-                GetProcessForPID(pid, &psn)
-                _SLPSSetFrontProcessWithOptions(&psn, windowID, 0x200)
-                makeKeyWindow(&psn, windowID: windowID)
-            }
-            AXUIElementSetAttributeValue(appElement, kAXFrontmostAttribute as CFString, true as CFTypeRef)
-            if let axWindow {
-                AXUIElementPerformAction(axWindow, kAXRaiseAction as CFString)
-            }
+        // CGS → SkyLight → AX. All three layers are needed for the system to
+        // fully update (Space switch + front process + menu bar). Same sequence
+        // for full-screen and normal targets.
+        if windowID != 0 {
+            switchDisplayToWindowSpace(windowID: windowID)
+            var psn = ProcessSerialNumber()
+            GetProcessForPID(pid, &psn)
+            _SLPSSetFrontProcessWithOptions(&psn, windowID, 0x200)
+            makeKeyWindow(&psn, windowID: windowID)
         }
+        AXUIElementSetAttributeValue(appElement, kAXFrontmostAttribute as CFString, true as CFTypeRef)
 
-        return true
+        guard let axWindow else {
+            print("[WP] focus: no AX window match for wid=\(windowID) '\(windowTitle)'")
+            return false
+        }
+        let raiseResult = AXUIElementPerformAction(axWindow, kAXRaiseAction as CFString)
+        if raiseResult != .success {
+            print("[WP] focus: AXRaise failed (\(raiseResult.rawValue)) for wid=\(windowID)")
+        }
+        return raiseResult == .success
     }
 
     public func hasAccessibilityPermission() -> Bool {

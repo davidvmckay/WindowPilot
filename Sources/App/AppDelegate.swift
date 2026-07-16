@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var preferencesWindow: PreferencesWindow?
     private var navigatorMenuItem: NSMenuItem!
     private var carouselMenuItem: NSMenuItem!
+    private var previewGeneration: UInt64 = 0
 
     // MARK: - Lifecycle
 
@@ -356,26 +357,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func wirePanel() {
         panel.onWindowSelected = { [weak self] windowInfo in
             guard let self, self.hasScreenRecording else { return }
-            // Minimized windows produce tiny dock thumbnails — use cached screenshot
-            if windowInfo.state == .minimized,
-               let cached = self.screenshotCache.image(forWindowID: windowInfo.id) {
-                self.panel.showPreview(image: cached)
-                return
-            }
-            let image = self.capture.capture(windowID: windowInfo.id)
-            // If new capture is much smaller than cached, prefer cached (window may be
-            // in transition — resizing, space switching, etc.)
-            if let image, let cached = self.screenshotCache.image(forWindowID: windowInfo.id) {
-                let newPixels = image.width * image.height
-                let cachedPixels = cached.width * cached.height
-                if newPixels < cachedPixels / 2 {
-                    self.panel.showPreview(image: cached)
-                    return
+            self.previewGeneration &+= 1
+            let generation = self.previewGeneration
+
+            // Show the best image we already have; a fresh capture lands below.
+            let cached = self.screenshotCache.image(forWindowID: windowInfo.id)
+            self.panel.showPreview(image: cached)
+
+            // Minimized windows produce tiny dock thumbnails — cached is all we have
+            if windowInfo.state == .minimized { return }
+
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                guard let self else { return }
+                let image = self.capture.capture(windowID: windowInfo.id)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, generation == self.previewGeneration else { return }
+                    guard let image else { return }
+                    // If the fresh capture is much smaller than cached, the window is
+                    // likely mid-transition (resize/space switch) — keep the cached one.
+                    if let cached, image.width * image.height < (cached.width * cached.height) / 2 {
+                        return
+                    }
+                    self.panel.showPreview(image: image)
+                    self.screenshotCache.cache(image: image, forWindowID: windowInfo.id)
                 }
-            }
-            self.panel.showPreview(image: image)
-            if let image {
-                self.screenshotCache.cache(image: image, forWindowID: windowInfo.id)
             }
         }
 

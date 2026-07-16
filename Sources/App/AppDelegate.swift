@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var preferencesWindow: PreferencesWindow?
     private var navigatorMenuItem: NSMenuItem!
     private var carouselMenuItem: NSMenuItem!
+    private var updateManager: UpdateManager!
     private var previewGeneration: UInt64 = 0
 
     // MARK: - Lifecycle
@@ -46,6 +47,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onToggle: { [weak self] in self?.togglePanel() },
             onCarousel: { [weak self] in self?.showCarousel() }
         )
+
+        updateManager = UpdateManager()
 
         setupStatusItem()
         offerCLIInstallation()
@@ -577,6 +580,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "Change Shortcuts…", action: #selector(showPreferences), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "About WindowPilot", action: #selector(showAbout), keyEquivalent: "")
+        menu.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdatesAction), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit", action: #selector(quitAction), keyEquivalent: "q")
 
@@ -634,6 +638,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+
+    @objc private func checkForUpdatesAction() {
+        updateManager.checkForUpdates()
     }
 
     @objc private func quitAction() {

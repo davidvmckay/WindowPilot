@@ -8,6 +8,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/soffes/HotKey.git", from: "0.2.0"),
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
     ],
     targets: [
         .executableTarget(
@@ -16,8 +17,18 @@ let package = Package(
                 "WindowPilotCore",
                 "WindowPilotUI",
                 "HotKey",
+                .product(name: "Sparkle", package: "Sparkle"),
             ],
-            path: "Sources/App"
+            path: "Sources/App",
+            linkerSettings: [
+                // Bundle layout: WindowPilot.app/Contents/Frameworks/Sparkle.framework
+                .unsafeFlags([
+                    "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks",
+                    // Dev layout: .build/debug/WindowPilot finds the SPM artifact
+                    "-Xlinker", "-rpath", "-Xlinker",
+                    "@loader_path/../artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64",
+                ]),
+            ]
         ),
         .executableTarget(
             name: "windowpilot-cli",

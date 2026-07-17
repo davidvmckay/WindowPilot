@@ -135,6 +135,14 @@ public final class SidebarPanel: NSPanel {
         }
     }
 
+    /// Reattach after a Space switch (moveToActiveSpace leaves the strip on
+    /// the previous Space). Respects mode state and fullscreen suppression —
+    /// never un-hides a strip that is suppressed over a fullscreen app.
+    public func reattachToActiveSpace() {
+        guard userWantsVisible, !suppressedForFullscreen else { return }
+        orderFrontRegardless()
+    }
+
     public func render(pinned: [SidebarSlot], dynamic: [SidebarSlot], focusedWindowID: UInt32?) {
         pinnedSlots = pinned
         dynamicSlots = dynamic

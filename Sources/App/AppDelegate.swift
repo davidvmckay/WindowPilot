@@ -76,12 +76,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             sidebar.show(on: NSScreen.main)
         }
 
-        // moveToActiveSpace strip stays behind on Space switch — reattach.
+        // moveToActiveSpace strip stays behind on Space switch — reattach
+        // (guarded inside: never un-hides over a fullscreen app).
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.activeSpaceDidChangeNotification,
             object: nil, queue: .main
         ) { [weak self] _ in
-            self?.sidebar?.orderFrontRegardless()
+            self?.sidebar?.reattachToActiveSpace()
         }
     }
 
@@ -692,6 +693,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.setCollapsed(UserDefaults.standard.bool(forKey: "SidebarCollapsed"))
         syncSidebar()
         panel.show(on: NSScreen.main)
+
+        // Re-evaluate fullscreen suppression immediately — the tracker's
+        // same-window guard would otherwise defer it to the next focus change
+        // (e.g. enabling the sidebar while a fullscreen app is frontmost).
+        lastTrackedWindowID = 0
+        trackFocusedWindow()
     }
 
     private func disableSidebar() {

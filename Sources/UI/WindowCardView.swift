@@ -37,6 +37,10 @@ public final class WindowCardView: NSView {
 
     public var onClicked: (() -> Void)?
     public var onDoubleClicked: (() -> Void)?
+    public var onMouseEntered: (() -> Void)?
+    public var onMouseExited: (() -> Void)?
+    public var onDragEnded: ((NSPoint) -> Void)?   // screen point where drag ended
+    private var dragOrigin: NSPoint?
 
     private let thumbnailView: WindowThumbnailView
     private let iconView = NSImageView()
@@ -112,4 +116,23 @@ public final class WindowCardView: NSView {
 
     @objc private func handleClick() { onClicked?() }
     @objc private func handleDoubleClick() { onDoubleClicked?() }
+
+    public override func mouseEntered(with event: NSEvent) { onMouseEntered?() }
+    public override func mouseExited(with event: NSEvent) { onMouseExited?() }
+
+    public override func mouseDragged(with event: NSEvent) {
+        dragOrigin = dragOrigin ?? event.locationInWindow
+    }
+
+    public override func mouseUp(with event: NSEvent) {
+        defer { dragOrigin = nil }
+        if let origin = dragOrigin,
+           hypot(event.locationInWindow.x - origin.x, event.locationInWindow.y - origin.y) > 20,
+           let window = self.window {
+            let screenPoint = window.convertPoint(toScreen: event.locationInWindow)
+            onDragEnded?(screenPoint)
+            return
+        }
+        super.mouseUp(with: event)
+    }
 }

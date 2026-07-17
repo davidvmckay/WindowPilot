@@ -47,6 +47,8 @@ public final class SidebarPanel: NSPanel {
     // Task 6 wires these:
     public var onPinRequested: ((WindowInfo) -> Void)?
     public var onUnpinRequested: ((Int) -> Void)?
+    public var onWindowClosed: ((WindowInfo) -> Void)?
+    public var onWindowMinimized: ((WindowInfo) -> Void)?
 
     // MARK: State
 
@@ -112,6 +114,7 @@ public final class SidebarPanel: NSPanel {
 
     public func hide() {
         userWantsVisible = false
+        hideHoverPreview()
         orderOut(nil)
     }
 
@@ -125,6 +128,7 @@ public final class SidebarPanel: NSPanel {
     public func setHiddenForFullscreen(_ hidden: Bool) {
         suppressedForFullscreen = hidden
         if hidden {
+            hideHoverPreview()
             orderOut(nil)
         } else if userWantsVisible {
             orderFrontRegardless()
@@ -177,6 +181,7 @@ public final class SidebarPanel: NSPanel {
     }
 
     private func rebuildSlots() {
+        hideHoverPreview()
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         slotViews.removeAll()
         guard !collapsedNow else { return }
@@ -222,6 +227,30 @@ public final class SidebarPanel: NSPanel {
             card.onClicked = { [weak self] in self?.onDeadPinActivated?(pinIndex) }
         }
         slotViews.append((slot, card))
+        card.menu = makeContextMenu(for: slot)
+        if let window = slot.window {
+            let hoverArea = NSTrackingArea(
+                rect: .zero,
+                options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                owner: card, userInfo: nil
+            )
+            card.addTrackingArea(hoverArea)
+            card.onMouseEntered = { [weak self, weak card] in
+                guard let self, let card else { return }
+                self.showHoverPreview(for: window, near: card)
+            }
+            card.onMouseExited = { [weak self] in self?.hideHoverPreview() }
+        }
+        if slot.kind == .dynamic, let window = slot.window {
+            card.onDragEnded = { [weak self] screenPoint in
+                guard let self else { return }
+                // Dropped inside the pinned zone's vertical range?
+                let pinnedBottom = self.pinnedZoneBottomOnScreen()
+                if screenPoint.y > pinnedBottom {
+                    self.onPinRequested?(window)
+                }
+            }
+        }
         return card
     }
 
@@ -230,6 +259,109 @@ public final class SidebarPanel: NSPanel {
         box.boxType = .separator
         box.widthAnchor.constraint(equalToConstant: Self.expandedWidth - 20).isActive = true
         return box
+    }
+
+    // MARK: Context menu
+
+    private func makeContextMenu(for slot: SidebarSlot) -> NSMenu {
+        let menu = NSMenu()
+        if slot.kind == .dynamic, let window = slot.window {
+            let pinItem = NSMenuItem(title: "Pin", action: #selector(menuPin(_:)), keyEquivalent: "")
+            pinItem.target = self
+            pinItem.representedObject = window
+            menu.addItem(pinItem)
+        }
+        if slot.kind == .pinned {
+            let unpinItem = NSMenuItem(title: "Unpin", action: #selector(menuUnpin(_:)), keyEquivalent: "")
+            unpinItem.target = self
+            unpinItem.representedObject = slot.index
+            menu.addItem(unpinItem)
+        }
+        if let window = slot.window {
+            menu.addItem(.separator())
+            let closeItem = NSMenuItem(title: "Close Window", action: #selector(menuClose(_:)), keyEquivalent: "")
+            closeItem.target = self
+            closeItem.representedObject = window
+            menu.addItem(closeItem)
+            let minItem = NSMenuItem(title: "Minimize", action: #selector(menuMinimize(_:)), keyEquivalent: "")
+            minItem.target = self
+            minItem.representedObject = window
+            menu.addItem(minItem)
+        }
+        return menu
+    }
+
+    @objc private func menuPin(_ sender: NSMenuItem) {
+        guard let window = sender.representedObject as? WindowInfo else { return }
+        onPinRequested?(window)
+    }
+
+    @objc private func menuUnpin(_ sender: NSMenuItem) {
+        guard let index = sender.representedObject as? Int else { return }
+        onUnpinRequested?(index)
+    }
+
+    @objc private func menuClose(_ sender: NSMenuItem) {
+        guard let window = sender.representedObject as? WindowInfo else { return }
+        onWindowClosed?(window)
+    }
+
+    @objc private func menuMinimize(_ sender: NSMenuItem) {
+        guard let window = sender.representedObject as? WindowInfo else { return }
+        onWindowMinimized?(window)
+    }
+
+    // MARK: Hover preview
+
+    private var previewPanel: NSPanel?
+
+    private func showHoverPreview(for window: WindowInfo, near view: NSView) {
+        hideHoverPreview()
+        guard let thumbnail = slotViews.first(where: { $0.slot.window?.id == window.id })?.slot.thumbnail
+        else { return }
+
+        let maxSize = NSSize(width: 360, height: 240)
+        let aspect = CGFloat(thumbnail.width) / max(CGFloat(thumbnail.height), 1)
+        let size = aspect > maxSize.width / maxSize.height
+            ? NSSize(width: maxSize.width, height: maxSize.width / aspect)
+            : NSSize(width: maxSize.height * aspect, height: maxSize.height)
+
+        let panel = NSPanel(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.nonactivatingPanel], backing: .buffered, defer: false
+        )
+        panel.level = .floating
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.ignoresMouseEvents = true
+        panel.isReleasedWhenClosed = false
+        panel.hasShadow = true
+
+        let imageView = WindowThumbnailView(thumbnail: thumbnail, cornerRadius: 8)
+        imageView.frame = NSRect(origin: .zero, size: size)
+        panel.contentView = imageView
+
+        // Place to the left of the strip, vertically centered on the slot.
+        let slotFrameInWindow = view.convert(view.bounds, to: nil)
+        let slotFrameOnScreen = convertToScreen(slotFrameInWindow)
+        panel.setFrameOrigin(NSPoint(
+            x: frame.minX - size.width - 8,
+            y: slotFrameOnScreen.midY - size.height / 2
+        ))
+        panel.orderFrontRegardless()
+        previewPanel = panel
+    }
+
+    private func hideHoverPreview() {
+        previewPanel?.orderOut(nil)
+        previewPanel = nil
+    }
+
+    /// Screen-Y of the bottom of the pinned zone (top `pinnedSlots.count`
+    /// slots + chevron). Drops above this line count as "into the pinned zone".
+    private func pinnedZoneBottomOnScreen() -> CGFloat {
+        let pinnedHeight = CGFloat(pinnedSlots.count) * (Self.slotHeight + Self.slotSpacing) + 30
+        return frame.maxY - pinnedHeight
     }
 
     // MARK: Collapse / hot edge

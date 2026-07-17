@@ -706,6 +706,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sidebar = nil
     }
 
+    /// How many dynamic cards fit comfortably on the strip's screen:
+    /// use ~80% of the visible height, subtract chrome and pinned cards,
+    /// floor to whole slots, cap at 8, always show at least 1.
+    private func sidebarDynamicCapacity(pinnedCount: Int) -> Int {
+        let screen = sidebar?.currentScreen ?? NSScreen.main
+        let usable = (screen?.visibleFrame.height ?? 900) * 0.8
+        let chrome: CGFloat = 90   // paddings + chevron + separators + overflow button
+        let fit = Int((usable - chrome) / SidebarPanel.slotUnit) - pinnedCount
+        return max(1, min(8, fit))
+    }
+
     /// Rebuild sidebar slots from the current world. Called on focus changes
     /// (max every 2s via the tracker) and after pin/close/minimize actions.
     private func syncSidebar() {
@@ -714,15 +725,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let apps = enumerator.enumerate(excludingPID: ownPID)
 
         // Pinned zone: resolve stored pins against live windows.
+        // Empty pin positions are not rendered — cards only, no placeholders.
         var pinnedSlots: [SidebarSlot] = []
         var pinnedIDs = Set<UInt32>()
         for (i, pin) in pinStore.pins.enumerated() {
-            guard let pin else {
-                pinnedSlots.append(SidebarSlot(
-                    kind: .pinned, index: i, window: nil, appName: "", pid: 0, thumbnail: nil
-                ))
-                continue
-            }
+            guard let pin else { continue }
             if let window = pinStore.resolve(pin, in: apps) {
                 pinnedIDs.insert(window.id)
                 pinnedSlots.append(SidebarSlot(
@@ -737,7 +744,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // Dynamic zone: parking-lot over everything not pinned.
+        // Dynamic zone: parking-lot over everything not pinned. Capacity
+        // adapts to the strip's screen height (small screens show fewer),
+        // capped at 8. Occupied positions render; empties are skipped.
+        let capacity = sidebarDynamicCapacity(pinnedCount: pinnedSlots.count)
+        if slotAllocator.slots.count != capacity {
+            slotAllocator = SlotAllocator(capacity: capacity)
+        }
+
         var infoByID: [UInt32: (WindowInfo, String)] = [:]
         for app in apps {
             for w in app.windows { infoByID[w.id] = (w, app.name) }
@@ -746,10 +760,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let priority = tracker.combinedRanking(limit: 30).map(\.id).filter { !pinnedIDs.contains($0) }
         slotAllocator.sync(live: live, priority: priority)
 
-        let dynamicSlots: [SidebarSlot] = slotAllocator.slots.enumerated().map { i, wid in
-            guard let wid, let (window, appName) = infoByID[wid] else {
-                return SidebarSlot(kind: .dynamic, index: i, window: nil, appName: "", pid: 0, thumbnail: nil)
-            }
+        let dynamicSlots: [SidebarSlot] = slotAllocator.slots.enumerated().compactMap { i, wid in
+            guard let wid, let (window, appName) = infoByID[wid] else { return nil }
             return SidebarSlot(
                 kind: .dynamic, index: i, window: window, appName: appName,
                 pid: window.ownerPID, thumbnail: screenshotCache.image(forWindowID: window.id)

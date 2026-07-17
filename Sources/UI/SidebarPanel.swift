@@ -38,6 +38,8 @@ public final class SidebarPanel: NSPanel {
     private static let collapsedHeight: CGFloat = 64
     private static let slotHeight: CGFloat = 96
     private static let slotSpacing: CGFloat = 6
+    /// One slot's vertical footprint — used by the capacity calculation.
+    public static var slotUnit: CGFloat { slotHeight + slotSpacing }
     private static let contentPadding: CGFloat = 12   // breathing room above/below content
     private static let edgeInset: CGFloat = 8         // gap between strip and screen edge when expanded
 

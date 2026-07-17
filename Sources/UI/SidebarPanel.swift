@@ -37,8 +37,6 @@ public final class SidebarPanel: NSPanel {
     public static let collapsedWidth: CGFloat = 8
     private static let slotHeight: CGFloat = 64
     private static let slotSpacing: CGFloat = 4
-    private static let sectionGap: CGFloat = 8
-    private static let chromeHeight: CGFloat = 60   // chevron + overflow + paddings
 
     // MARK: Callbacks
 
@@ -251,10 +249,15 @@ public final class SidebarPanel: NSPanel {
     private func reposition() {
         guard let screen = targetScreen ?? NSScreen.main else { return }
         let width = collapsedNow ? Self.collapsedWidth : Self.expandedWidth
-        let slotCount = CGFloat(pinnedSlots.count + dynamicSlots.count)
-        let height = collapsedNow
-            ? 200
-            : slotCount * (Self.slotHeight + Self.slotSpacing) + Self.chromeHeight
+        // Height follows the actual stack content (slots + separators + buttons),
+        // so nothing at the bottom ever gets clipped by a fixed allowance.
+        let height: CGFloat
+        if collapsedNow {
+            height = 200
+        } else {
+            stack.layoutSubtreeIfNeeded()
+            height = stack.fittingSize.height + 16   // 8pt top + 8pt bottom margin
+        }
         let f = screen.visibleFrame
         setFrame(
             NSRect(x: f.maxX - width, y: f.midY - height / 2, width: width, height: height),

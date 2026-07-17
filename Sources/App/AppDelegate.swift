@@ -52,7 +52,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         setupStatusItem()
         offerCLIInstallation()
+
+        // TEMPORARY SPIKE (removed in sidebar Task 5): validate persistent
+        // canJoinAllSpaces panel vs Space switching. Run with --sidebar-spike.
+        if ProcessInfo.processInfo.arguments.contains("--sidebar-spike") {
+            let spike = NSPanel(
+                contentRect: NSRect(x: 0, y: 0, width: 76, height: 400),
+                styleMask: [.nonactivatingPanel],
+                backing: .buffered, defer: false
+            )
+            spike.level = .floating
+            spike.isReleasedWhenClosed = false
+            spike.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            spike.backgroundColor = .clear
+            spike.isOpaque = false
+            let effect = NSVisualEffectView(frame: spike.contentLayoutRect)
+            effect.material = .hudWindow
+            effect.state = .active
+            effect.wantsLayer = true
+            effect.layer?.cornerRadius = 10
+            let label = NSTextField(labelWithString: "SPIKE")
+            label.frame = NSRect(x: 14, y: 190, width: 60, height: 20)
+            effect.addSubview(label)
+            spike.contentView = effect
+            if let screen = NSScreen.main {
+                let f = screen.visibleFrame
+                spike.setFrame(NSRect(x: f.maxX - 76, y: f.midY - 200, width: 76, height: 400), display: true)
+            }
+            spike.orderFrontRegardless()
+            spikePanel = spike
+        }
     }
+
+    private var spikePanel: NSPanel?
 
     // MARK: - CLI Installation
 

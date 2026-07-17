@@ -3,6 +3,23 @@
     <channel>
         <title>WindowPilot</title>
         <item>
+            <title>1.4.1</title>
+            <pubDate>Fri, 17 Jul 2026 12:15:03 -0700</pubDate>
+            <sparkle:version>1.4.1</sparkle:version>
+            <sparkle:shortVersionString>1.4.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description><![CDATA[<h2>Fixes</h2>
+<ul>
+<li><b>Sidebar cards are now clickable on every Mac</b> — clicks on the strip were silently swallowed on some machines because the sidebar never takes keyboard focus; cards now respond to the first click reliably</li>
+<li><b>Clean rounded corners</b> — the blur material no longer bleeds past the rounded corners as faint square lines (most visible against light backgrounds), in both the expanded strip and the collapsed edge handle</li>
+<li>The same corner fix is applied to the main panel, the carousel, and toast messages for a consistent look</li>
+<li>A hesitant drag-to-pin released early no longer switches windows by accident — short drags stay inert, exactly like a cancelled gesture</li>
+</ul>
+]]></description>
+            <enclosure url="https://github.com/ethannortharc/WindowPilot/releases/download/v1.4.1/WindowPilot-1.4.1.dmg" length="3297410" type="application/octet-stream" sparkle:edSignature="6mQQP9nEl282HbeWWkX0MB9+NCJ4HWLU6DTv1hIgpGGh+7Rbmj5uEokltkLVxKtjWnt4Zo0EA0Bma8Ego6ooDQ=="/>
+        </item>
+        <item>
             <title>1.4.0</title>
             <pubDate>Fri, 17 Jul 2026 09:21:04 -0700</pubDate>
             <sparkle:version>1.4.0</sparkle:version>

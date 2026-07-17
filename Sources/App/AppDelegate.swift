@@ -28,6 +28,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var updateManager: UpdateManager!
     private var previewGeneration: UInt64 = 0
 
+    // Sidebar mode (optional, off by default)
+    private var sidebar: SidebarPanel?
+    private var sidebarMenuItem: NSMenuItem!
+    private var slotAllocator = SlotAllocator(capacity: 5)
+    private lazy var pinStore: PinStore = {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("WindowPilot")
+        return PinStore(capacity: 3, fileURL: dir.appendingPathComponent("pins.json"))
+    }()
+    private var previousFocusedWindowID: UInt32 = 0
+
     // MARK: - Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -52,6 +63,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         setupStatusItem()
         offerCLIInstallation()
+
+        if UserDefaults.standard.bool(forKey: "SidebarEnabled") {
+            enableSidebar()
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self, let sidebar = self.sidebar else { return }
+            sidebar.show(on: NSScreen.main)
+        }
+
+        // moveToActiveSpace strip stays behind on Space switch — reattach.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.sidebar?.orderFrontRegardless()
+        }
     }
 
     // MARK: - CLI Installation
@@ -296,6 +327,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Skip if same window is still focused (avoid redundant updates from timer)
         guard windowID != lastTrackedWindowID else { return }
+        previousFocusedWindowID = lastTrackedWindowID
         lastTrackedWindowID = windowID
 
         // Get window title
@@ -323,15 +355,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // 3. Small windows → transient
-        if !isTransient,
-           let windowList = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] {
+        // 3. Small windows → transient (also captures bounds for the sidebar's
+        //    per-display fullscreen check below)
+        var focusedWindowBounds: CGRect = .zero
+        if let windowList = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] {
             for info in windowList {
                 guard let wid = info[kCGWindowNumber as String] as? CGWindowID,
                       wid == windowID,
                       let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
                       let w = bounds["Width"], let h = bounds["Height"] else { continue }
-                if w < 200 || h < 100 { isTransient = true }
+                focusedWindowBounds = CGRect(x: bounds["X"] ?? 0, y: bounds["Y"] ?? 0, width: w, height: h)
+                if !isTransient, w < 200 || h < 100 { isTransient = true }
                 break
             }
         }
@@ -351,6 +385,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             isFullScreen: isFullScreen,
             isTransient: isTransient
         )
+
+        // Sidebar: re-sync slots, refresh the thumbnail of the window that
+        // just lost focus (its content is "final" now), and auto-hide over
+        // fullscreen on the strip's display.
+        if let sidebar {
+            syncSidebar()
+
+            if hasScreenRecording, previousFocusedWindowID != 0 {
+                let lostID = previousFocusedWindowID
+                screenshotCache.refreshAsync(
+                    windowIDs: [lostID],
+                    capture: { [weak self] wid in self?.capture.capture(windowID: wid) }
+                ) { [weak self] refreshed in
+                    self?.sidebar?.updateThumbnails(refreshed)
+                    self?.panel.updateRecentThumbnails(refreshed)
+                }
+            }
+
+            // CG window bounds are top-left-origin; NSScreen frames are
+            // bottom-left-origin — flip Y against the primary screen height
+            // before intersecting.
+            let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+            let cocoaBounds = CGRect(
+                x: focusedWindowBounds.minX,
+                y: primaryHeight - focusedWindowBounds.maxY,
+                width: focusedWindowBounds.width,
+                height: focusedWindowBounds.height
+            )
+            let stripScreenFrame = (sidebar.currentScreen ?? NSScreen.main)?.frame ?? .zero
+            let hideForFullscreen = isFullScreen && cocoaBounds.intersects(stripScreenFrame)
+            sidebar.setHiddenForFullscreen(hideForFullscreen)
+        }
     }
 
     // MARK: - Panel Wiring
@@ -557,6 +623,135 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // MARK: - Sidebar Mode
+
+    @objc private func toggleSidebar() {
+        let enabled = sidebar == nil
+        UserDefaults.standard.set(enabled, forKey: "SidebarEnabled")
+        sidebarMenuItem.state = enabled ? .on : .off
+        if enabled { enableSidebar() } else { disableSidebar() }
+    }
+
+    private func enableSidebar() {
+        guard sidebar == nil else { return }
+        let panel = SidebarPanel()
+        sidebar = panel
+
+        panel.onWindowSelected = { [weak self] windowInfo in
+            self?.performFocus(windowInfo)
+        }
+        panel.onDeadPinActivated = { [weak self] pinIndex in
+            guard let self, let pin = self.pinStore.pins[safe: pinIndex] ?? nil,
+                  let bundleID = pin.bundleIdentifier,
+                  let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+            else {
+                ToastHUD.show("Couldn't locate that app")
+                return
+            }
+            NSWorkspace.shared.openApplication(at: url, configuration: .init(), completionHandler: nil)
+        }
+        panel.onPinRequested = { [weak self] windowInfo in
+            guard let self else { return }
+            let app = NSRunningApplication(processIdentifier: windowInfo.ownerPID)
+            if self.pinStore.pinFirstFree(
+                PinnedWindow(
+                    bundleIdentifier: app?.bundleIdentifier,
+                    appName: app?.localizedName ?? "",
+                    title: windowInfo.title
+                )
+            ) == nil {
+                ToastHUD.show("Pinned slots are full — unpin one first")
+            }
+            self.syncSidebar()
+        }
+        panel.onUnpinRequested = { [weak self] index in
+            self?.pinStore.unpin(at: index)
+            self?.syncSidebar()
+        }
+        panel.onWindowClosed = { [weak self] windowInfo in
+            guard let self else { return }
+            if !self.focuser.close(pid: windowInfo.ownerPID, windowTitle: windowInfo.title) {
+                ToastHUD.show("Couldn't close \"\(windowInfo.title)\"")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.syncSidebar() }
+        }
+        panel.onWindowMinimized = { [weak self] windowInfo in
+            guard let self else { return }
+            if !self.focuser.minimize(pid: windowInfo.ownerPID, windowTitle: windowInfo.title) {
+                ToastHUD.show("Couldn't minimize \"\(windowInfo.title)\"")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.syncSidebar() }
+        }
+        panel.onOverflowRequested = { [weak self] in
+            self?.showPanel()
+        }
+        panel.onCollapseToggled = { collapsed in
+            UserDefaults.standard.set(collapsed, forKey: "SidebarCollapsed")
+        }
+
+        panel.setCollapsed(UserDefaults.standard.bool(forKey: "SidebarCollapsed"))
+        syncSidebar()
+        panel.show(on: NSScreen.main)
+    }
+
+    private func disableSidebar() {
+        sidebar?.hide()
+        sidebar = nil
+    }
+
+    /// Rebuild sidebar slots from the current world. Called on focus changes
+    /// (max every 2s via the tracker) and after pin/close/minimize actions.
+    private func syncSidebar() {
+        guard let sidebar else { return }
+        let ownPID = Int32(ProcessInfo.processInfo.processIdentifier)
+        let apps = enumerator.enumerate(excludingPID: ownPID)
+
+        // Pinned zone: resolve stored pins against live windows.
+        var pinnedSlots: [SidebarSlot] = []
+        var pinnedIDs = Set<UInt32>()
+        for (i, pin) in pinStore.pins.enumerated() {
+            guard let pin else {
+                pinnedSlots.append(SidebarSlot(
+                    kind: .pinned, index: i, window: nil, appName: "", pid: 0, thumbnail: nil
+                ))
+                continue
+            }
+            if let window = pinStore.resolve(pin, in: apps) {
+                pinnedIDs.insert(window.id)
+                pinnedSlots.append(SidebarSlot(
+                    kind: .pinned, index: i, window: window, appName: pin.appName,
+                    pid: window.ownerPID, thumbnail: screenshotCache.image(forWindowID: window.id)
+                ))
+            } else {
+                pinnedSlots.append(SidebarSlot(
+                    kind: .pinned, index: i, window: nil, appName: pin.appName,
+                    pid: 0, thumbnail: nil, isDeadPin: true
+                ))
+            }
+        }
+
+        // Dynamic zone: parking-lot over everything not pinned.
+        var infoByID: [UInt32: (WindowInfo, String)] = [:]
+        for app in apps {
+            for w in app.windows { infoByID[w.id] = (w, app.name) }
+        }
+        let live = Set(infoByID.keys).subtracting(pinnedIDs)
+        let priority = tracker.combinedRanking(limit: 30).map(\.id).filter { !pinnedIDs.contains($0) }
+        slotAllocator.sync(live: live, priority: priority)
+
+        let dynamicSlots: [SidebarSlot] = slotAllocator.slots.enumerated().map { i, wid in
+            guard let wid, let (window, appName) = infoByID[wid] else {
+                return SidebarSlot(kind: .dynamic, index: i, window: nil, appName: "", pid: 0, thumbnail: nil)
+            }
+            return SidebarSlot(
+                kind: .dynamic, index: i, window: window, appName: appName,
+                pid: window.ownerPID, thumbnail: screenshotCache.image(forWindowID: window.id)
+            )
+        }
+
+        sidebar.render(pinned: pinnedSlots, dynamic: dynamicSlots, focusedWindowID: lastTrackedWindowID)
+    }
+
     // MARK: - Status Item
 
     private func setupStatusItem() {
@@ -576,6 +771,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             withTitle: "Show Carousel (\(hotkeyManager.carouselShortcutDisplay))",
             action: #selector(carouselAction), keyEquivalent: ""
         )
+        menu.addItem(.separator())
+        sidebarMenuItem = menu.addItem(
+            withTitle: "Show Sidebar",
+            action: #selector(toggleSidebar), keyEquivalent: ""
+        )
+        sidebarMenuItem.state = UserDefaults.standard.bool(forKey: "SidebarEnabled") ? .on : .off
         menu.addItem(.separator())
         menu.addItem(withTitle: "Change Shortcuts…", action: #selector(showPreferences), keyEquivalent: "")
         menu.addItem(.separator())
@@ -646,5 +847,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func quitAction() {
         NSApp.terminate(nil)
+    }
+}
+
+extension Array {
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
     }
 }

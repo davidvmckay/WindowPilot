@@ -234,7 +234,7 @@ final class RecentCardView: NSView {
     var onDoubleClicked: ((Int) -> Void)?
 
     private let index: Int
-    private let thumbnailView = NSImageView()
+    private let thumbnailView: WindowThumbnailView
     private let infoStack = NSStackView()
     private let appLine = NSStackView()
     private let appIconView = NSImageView()
@@ -244,6 +244,11 @@ final class RecentCardView: NSView {
 
     init(tracked: TrackedWindow, thumbnail: CGImage?, index: Int) {
         self.index = index
+        self.thumbnailView = WindowThumbnailView(
+            thumbnail: thumbnail,
+            cornerRadius: 8,
+            maskedCorners: [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
+        )
         super.init(frame: .zero)
 
         wantsLayer = true
@@ -252,19 +257,6 @@ final class RecentCardView: NSView {
         layer?.borderWidth = 1
         layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.3).cgColor
 
-        // Thumbnail
-        thumbnailView.imageScaling = .scaleProportionallyUpOrDown
-        thumbnailView.wantsLayer = true
-        thumbnailView.layer?.maskedCorners = [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
-        thumbnailView.layer?.cornerRadius = 8
-        thumbnailView.layer?.masksToBounds = true
-        if let thumbnail {
-            thumbnailView.image = NSImage(cgImage: thumbnail, size: .zero)
-        } else {
-            thumbnailView.image = NSImage(systemSymbolName: "macwindow", accessibilityDescription: nil)
-            thumbnailView.contentTintColor = .tertiaryLabelColor
-            thumbnailView.imageScaling = .scaleNone
-        }
         addSubview(thumbnailView)
 
         // App icon + name line
@@ -329,8 +321,7 @@ final class RecentCardView: NSView {
     }
 
     func updateThumbnail(_ image: CGImage) {
-        thumbnailView.image = NSImage(cgImage: image, size: .zero)
-        thumbnailView.imageScaling = .scaleProportionallyUpOrDown
+        thumbnailView.setThumbnail(image)
     }
 
     @objc private func handleClick() { onClicked?(index) }

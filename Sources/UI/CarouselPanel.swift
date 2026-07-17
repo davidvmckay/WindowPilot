@@ -19,7 +19,7 @@ public final class CarouselPanel: NSPanel {
 
     private var windows: [CarouselItem] = []
     private var selectedIndex: Int = 0
-    private var cardViews: [CarouselCardView] = []
+    private var cardViews: [WindowCardView] = []
     private var flagsMonitor: Any?
     private var localFlagsMonitor: Any?
 
@@ -170,7 +170,7 @@ public final class CarouselPanel: NSPanel {
         let spacing: CGFloat = 8
 
         for (index, item) in windows.enumerated() {
-            let card = CarouselCardView(item: item, index: index)
+            let card = WindowCardView(appName: item.appName, pid: item.pid, thumbnail: item.thumbnail)
             card.frame = NSRect(
                 x: CGFloat(index) * (cardWidth + spacing),
                 y: 0,
@@ -302,80 +302,5 @@ public struct CarouselItem {
         self.appName = appName
         self.windowTitle = windowTitle
         self.thumbnail = thumbnail
-    }
-}
-
-// MARK: - CarouselCardView
-
-/// A single card in the carousel: thumbnail on top, app icon + title below.
-final class CarouselCardView: NSView {
-
-    private let thumbnailView = NSImageView()
-    private let iconView = NSImageView()
-    private let nameLabel = NSTextField(labelWithString: "")
-
-    init(item: CarouselItem, index: Int) {
-        super.init(frame: .zero)
-        wantsLayer = true
-        layer?.cornerRadius = 8
-        layer?.cornerCurve = .continuous
-        layer?.borderWidth = 2
-        layer?.borderColor = NSColor.clear.cgColor
-
-        // Thumbnail
-        thumbnailView.imageScaling = .scaleProportionallyUpOrDown
-        thumbnailView.wantsLayer = true
-        thumbnailView.layer?.cornerRadius = 6
-        thumbnailView.layer?.masksToBounds = true
-        if let thumb = item.thumbnail {
-            thumbnailView.image = NSImage(cgImage: thumb, size: .zero)
-        } else {
-            thumbnailView.image = NSImage(systemSymbolName: "macwindow", accessibilityDescription: nil)
-            thumbnailView.contentTintColor = .tertiaryLabelColor
-            thumbnailView.imageScaling = .scaleNone
-        }
-        addSubview(thumbnailView)
-
-        // App icon
-        iconView.imageScaling = .scaleProportionallyDown
-        if let app = NSRunningApplication(processIdentifier: item.pid) {
-            iconView.image = app.icon
-        }
-        addSubview(iconView)
-
-        // App name
-        nameLabel.stringValue = item.appName
-        nameLabel.font = .systemFont(ofSize: 10)
-        nameLabel.textColor = .secondaryLabelColor
-        nameLabel.lineBreakMode = .byTruncatingTail
-        nameLabel.alignment = .left
-        addSubview(nameLabel)
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    override var isFlipped: Bool { true }
-
-    override func layout() {
-        super.layout()
-        let w = bounds.width
-        let thumbH = bounds.height - 24
-        thumbnailView.frame = NSRect(x: 4, y: 4, width: w - 8, height: thumbH - 4)
-        iconView.frame = NSRect(x: 6, y: thumbH + 2, width: 14, height: 14)
-        nameLabel.frame = NSRect(x: 22, y: thumbH + 1, width: w - 28, height: 16)
-    }
-
-    func setSelected(_ selected: Bool) {
-        layer?.borderColor = selected
-            ? NSColor.controlAccentColor.cgColor
-            : NSColor.clear.cgColor
-        layer?.backgroundColor = selected
-            ? NSColor.controlAccentColor.withAlphaComponent(0.1).cgColor
-            : nil
-    }
-
-    func updateThumbnail(_ image: CGImage) {
-        thumbnailView.image = NSImage(cgImage: image, size: .zero)
-        thumbnailView.imageScaling = .scaleProportionallyUpOrDown
     }
 }

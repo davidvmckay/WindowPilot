@@ -21,8 +21,10 @@ public struct SlotAllocator: Equatable {
     /// - Parameters:
     ///   - live: window IDs eligible for the dynamic zone (pinned windows
     ///     already excluded by the caller)
-    ///   - priority: hottest-first ranking (e.g. MRU); windows absent from
-    ///     the list rank coldest
+    ///   - priority: hottest-first ranking (e.g. MRU). Seated windows absent
+    ///     from the list rank coldest for eviction. Live windows absent from
+    ///     the list are NOT admitted — a window enters the zone only once it
+    ///     appears in the ranking (i.e. has been focused).
     public mutating func sync(live: Set<UInt32>, priority: [UInt32]) {
         var rank: [UInt32: Int] = [:]
         for (i, w) in priority.enumerated() where rank[w] == nil { rank[w] = i }
@@ -33,9 +35,12 @@ public struct SlotAllocator: Equatable {
             if let w = slots[i], !live.contains(w) { slots[i] = nil }
         }
 
-        // 2. Newcomers: live, not seated — hottest first.
+        // 2. Newcomers: live, not seated — hottest first, deduplicated.
         let seated = Set(slots.compactMap { $0 })
-        var newcomers = priority.filter { live.contains($0) && !seated.contains($0) }
+        var admitted = Set<UInt32>()
+        var newcomers = priority.filter {
+            live.contains($0) && !seated.contains($0) && admitted.insert($0).inserted
+        }
 
         // 2a. Fill empty positions top-down.
         for i in slots.indices where slots[i] == nil {

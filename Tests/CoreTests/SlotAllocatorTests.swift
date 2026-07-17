@@ -62,4 +62,25 @@ final class SlotAllocatorTests: XCTestCase {
         a.sync(live: [10], priority: [10])
         XCTAssertEqual(a.slots, [])
     }
+
+    func testDuplicatePriorityEntriesDoNotDuplicateWindows() {
+        var a = SlotAllocator(capacity: 3)
+        a.sync(live: [10], priority: [10])
+        a.sync(live: [10, 40], priority: [40, 40])
+        XCTAssertEqual(a.slots, [10, 40, nil])
+    }
+
+    func testDuplicateNewcomerCannotEvictTwice() {
+        var a = SlotAllocator(capacity: 2)
+        a.sync(live: [10, 20], priority: [10, 20])
+        // 40 duplicated: must evict exactly one (the coldest: 20), never both.
+        a.sync(live: [10, 20, 40], priority: [40, 40, 10, 20])
+        XCTAssertEqual(a.slots, [10, 40])
+    }
+
+    func testUnrankedLiveWindowIsNotAdmitted() {
+        var a = SlotAllocator(capacity: 2)
+        a.sync(live: [10, 20], priority: [10])
+        XCTAssertEqual(a.slots, [10, nil])
+    }
 }

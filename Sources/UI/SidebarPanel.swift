@@ -33,9 +33,10 @@ public struct SidebarSlot {
 /// parking-lot dynamic zone below, overflow button at the bottom.
 public final class SidebarPanel: NSPanel {
 
-    public static let expandedWidth: CGFloat = 76
-    public static let collapsedWidth: CGFloat = 8
-    private static let slotHeight: CGFloat = 64
+    public static let expandedWidth: CGFloat = 128
+    public static let collapsedWidth: CGFloat = 10
+    private static let collapsedHeight: CGFloat = 64
+    private static let slotHeight: CGFloat = 96
     private static let slotSpacing: CGFloat = 6
     private static let contentPadding: CGFloat = 12   // breathing room above/below content
     private static let edgeInset: CGFloat = 8         // gap between strip and screen edge when expanded
@@ -68,6 +69,8 @@ public final class SidebarPanel: NSPanel {
     private let stack = NSStackView()
     private let chevronButton = NSButton()
     private let overflowButton = NSButton()
+    private let grabber = NSView()                       // capsule handle shown when collapsed
+    private var collapseWorkItem: DispatchWorkItem?      // debounces peek collapse
 
     // MARK: Init
 
@@ -174,22 +177,42 @@ public final class SidebarPanel: NSPanel {
         stack.translatesAutoresizingMaskIntoConstraints = false
         visualEffect.addSubview(stack)
 
+        let smallSymbol = NSImage.SymbolConfiguration(pointSize: 11, weight: .medium)
+
         chevronButton.bezelStyle = .inline
         chevronButton.isBordered = false
-        chevronButton.image = NSImage(systemSymbolName: "chevron.right", accessibilityDescription: "Collapse")
+        chevronButton.image = NSImage(systemSymbolName: "chevron.right", accessibilityDescription: "Collapse")?
+            .withSymbolConfiguration(smallSymbol)
+        chevronButton.contentTintColor = .tertiaryLabelColor
         chevronButton.target = self
         chevronButton.action = #selector(chevronTapped)
 
         overflowButton.bezelStyle = .inline
         overflowButton.isBordered = false
-        overflowButton.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: "All Windows")
+        overflowButton.image = NSImage(systemSymbolName: "square.grid.2x2", accessibilityDescription: "All Windows")?
+            .withSymbolConfiguration(smallSymbol)
+        overflowButton.contentTintColor = .tertiaryLabelColor
         overflowButton.target = self
         overflowButton.action = #selector(overflowTapped)
+
+        // Capsule handle for the collapsed state — reads as "something is
+        // tucked here", not as leftover chrome.
+        grabber.wantsLayer = true
+        grabber.layer?.cornerRadius = 2
+        grabber.layer?.backgroundColor = NSColor.secondaryLabelColor.withAlphaComponent(0.55).cgColor
+        grabber.translatesAutoresizingMaskIntoConstraints = false
+        grabber.isHidden = true
+        visualEffect.addSubview(grabber)
 
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: visualEffect.topAnchor, constant: Self.contentPadding),
             stack.leadingAnchor.constraint(equalTo: visualEffect.leadingAnchor, constant: 4),
             stack.trailingAnchor.constraint(equalTo: visualEffect.trailingAnchor, constant: -4),
+
+            grabber.centerXAnchor.constraint(equalTo: visualEffect.centerXAnchor),
+            grabber.centerYAnchor.constraint(equalTo: visualEffect.centerYAnchor),
+            grabber.widthAnchor.constraint(equalToConstant: 4),
+            grabber.heightAnchor.constraint(equalToConstant: 32),
         ])
     }
 
@@ -197,6 +220,10 @@ public final class SidebarPanel: NSPanel {
         hideHoverPreview()
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         slotViews.removeAll()
+        grabber.isHidden = !collapsedNow
+        // Collapsed = quiet capsule handle: no border, tighter radius.
+        visualEffect.layer?.borderWidth = collapsedNow ? 0 : 1
+        visualEffect.layer?.cornerRadius = collapsedNow ? 5 : 12
         guard !collapsedNow else { return }
 
         stack.addArrangedSubview(chevronButton)
@@ -398,17 +425,20 @@ public final class SidebarPanel: NSPanel {
         // so nothing at the bottom ever gets clipped by a fixed allowance.
         let height: CGFloat
         if collapsedNow {
-            height = 200
+            height = Self.collapsedHeight
         } else {
             stack.layoutSubtreeIfNeeded()
             height = stack.fittingSize.height + Self.contentPadding * 2
         }
         let f = screen.visibleFrame
+        // Only a deliberately expanded strip floats off the edge. While
+        // collapsed OR peeking it stays flush, so the cursor at the screen
+        // edge remains inside the panel — otherwise peek-expansion opens a
+        // gap under the cursor, fires mouseExited, and the strip flickers.
+        let inset: CGFloat = isCollapsed ? 0 : Self.edgeInset
         setFrame(
-            // Expanded: float 8pt off the edge (refined look); collapsed: stay
-            // flush so the mouse can hit the hot edge.
             NSRect(
-                x: f.maxX - width - (collapsedNow ? 0 : Self.edgeInset),
+                x: f.maxX - width - inset,
                 y: f.midY - height / 2, width: width, height: height
             ),
             display: true
@@ -429,6 +459,7 @@ public final class SidebarPanel: NSPanel {
     }
 
     public override func mouseEntered(with event: NSEvent) {
+        collapseWorkItem?.cancel()
         guard isCollapsed, !isPeeking else { return }
         isPeeking = true
         rebuildSlots()
@@ -437,9 +468,17 @@ public final class SidebarPanel: NSPanel {
 
     public override func mouseExited(with event: NSEvent) {
         guard isCollapsed, isPeeking else { return }
-        isPeeking = false
-        rebuildSlots()
-        reposition()
+        // Debounce: brief excursions (crossing to a hover preview, grazing
+        // the edge) shouldn't snap the strip shut.
+        collapseWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.isCollapsed, self.isPeeking else { return }
+            self.isPeeking = false
+            self.rebuildSlots()
+            self.reposition()
+        }
+        collapseWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
     }
 
     // MARK: Actions

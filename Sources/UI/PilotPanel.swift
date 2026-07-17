@@ -171,10 +171,7 @@ public final class PilotPanel: NSPanel {
         // Rounded corners: transparent window + layer masking on content
         backgroundColor = .clear
         isOpaque = false
-        visualEffect.wantsLayer = true
-        visualEffect.layer?.cornerRadius = 10
-        visualEffect.layer?.cornerCurve = .continuous
-        visualEffect.layer?.masksToBounds = true
+        visualEffect.applyRoundedCorners(radius: 10)
     }
 
     private func buildLayout() {

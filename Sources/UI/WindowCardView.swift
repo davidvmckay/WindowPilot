@@ -40,7 +40,7 @@ public final class WindowCardView: NSView {
     public var onMouseEntered: (() -> Void)?
     public var onMouseExited: (() -> Void)?
     public var onDragEnded: ((NSPoint) -> Void)?   // screen point where drag ended
-    private var dragOrigin: NSPoint?
+    private var pressOrigin: NSPoint?              // mouseDown location in window
 
     private let thumbnailView: WindowThumbnailView
     private let iconView = NSImageView()
@@ -72,12 +72,6 @@ public final class WindowCardView: NSView {
             addSubview(nameLabel)
         }
 
-        let click = NSClickGestureRecognizer(target: self, action: #selector(handleClick))
-        click.delaysPrimaryMouseButtonEvents = false
-        addGestureRecognizer(click)
-        let doubleClick = NSClickGestureRecognizer(target: self, action: #selector(handleDoubleClick))
-        doubleClick.numberOfClicksRequired = 2
-        addGestureRecognizer(doubleClick)
     }
 
     public required init?(coder: NSCoder) { fatalError() }
@@ -114,25 +108,40 @@ public final class WindowCardView: NSView {
         alphaValue = dimmed ? 0.35 : 1.0
     }
 
-    @objc private func handleClick() { onClicked?() }
-    @objc private func handleDoubleClick() { onDoubleClicked?() }
-
     public override func mouseEntered(with event: NSEvent) { onMouseEntered?() }
     public override func mouseExited(with event: NSEvent) { onMouseExited?() }
 
-    public override func mouseDragged(with event: NSEvent) {
-        dragOrigin = dragOrigin ?? event.locationInWindow
+    // The sidebar hosts these cards in a non-activating panel that never
+    // becomes key. Without accepting first-mouse, AppKit swallows the initial
+    // click in a non-key window as a focus attempt and the card never sees it —
+    // which reads as "cards are unclickable" on some Macs. Accepting first mouse
+    // and driving selection from mouseDown/mouseUp makes clicks deterministic
+    // regardless of the host panel's key state. (Ctrl-click context menus are
+    // unaffected: NSWindow.sendEvent routes them via menu(for:) before
+    // mouseDown is ever dispatched.)
+    public override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    public override func mouseDown(with event: NSEvent) {
+        pressOrigin = event.locationInWindow
     }
 
     public override func mouseUp(with event: NSEvent) {
-        defer { dragOrigin = nil }
-        if let origin = dragOrigin,
-           hypot(event.locationInWindow.x - origin.x, event.locationInWindow.y - origin.y) > 20,
-           let window = self.window {
-            let screenPoint = window.convertPoint(toScreen: event.locationInWindow)
-            onDragEnded?(screenPoint)
+        defer { pressOrigin = nil }
+        guard let origin = pressOrigin else { return }
+        let travel = hypot(event.locationInWindow.x - origin.x,
+                           event.locationInWindow.y - origin.y)
+        if travel > 20, let window = self.window {
+            onDragEnded?(window.convertPoint(toScreen: event.locationInWindow))
             return
         }
-        super.mouseUp(with: event)
+        // A few points of jitter is still a click; 4–20pt is an aborted drag
+        // and must stay inert — otherwise a hesitant drag-to-pin released
+        // short of the threshold would fire onClicked and switch windows.
+        guard travel <= 4, bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        if event.clickCount >= 2 {
+            onDoubleClicked?()
+        } else {
+            onClicked?()
+        }
     }
 }

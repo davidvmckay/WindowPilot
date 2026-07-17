@@ -106,10 +106,7 @@ public final class CarouselPanel: NSPanel {
         visualEffect.material = .hudWindow
         visualEffect.blendingMode = .behindWindow
         visualEffect.state = .active
-        visualEffect.wantsLayer = true
-        visualEffect.layer?.cornerRadius = 12
-        visualEffect.layer?.cornerCurve = .continuous
-        visualEffect.layer?.masksToBounds = true
+        visualEffect.applyRoundedCorners(radius: 12)
         contentView = visualEffect
     }
 

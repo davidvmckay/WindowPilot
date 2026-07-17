@@ -45,10 +45,7 @@ public enum ToastHUD {
         effect.material = .hudWindow
         effect.blendingMode = .behindWindow
         effect.state = .active
-        effect.wantsLayer = true
-        effect.layer?.cornerRadius = 10
-        effect.layer?.cornerCurve = .continuous
-        effect.layer?.masksToBounds = true
+        effect.applyRoundedCorners(radius: 10)
         label.setFrameOrigin(NSPoint(x: hPad, y: vPad))
         effect.addSubview(label)
         hud.contentView = effect

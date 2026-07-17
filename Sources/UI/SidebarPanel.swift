@@ -95,13 +95,10 @@ public final class SidebarPanel: NSPanel {
         visualEffect.material = .hudWindow
         visualEffect.blendingMode = .behindWindow
         visualEffect.state = .active
-        visualEffect.wantsLayer = true
-        visualEffect.layer?.cornerRadius = 12
+        visualEffect.applyRoundedCorners(radius: 12)
         // Subtle hairline border lifts the strip off busy backgrounds.
         visualEffect.layer?.borderWidth = 1
         visualEffect.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.5).cgColor
-        visualEffect.layer?.cornerCurve = .continuous
-        visualEffect.layer?.masksToBounds = true
         contentView = visualEffect
 
         buildLayout()
@@ -225,7 +222,7 @@ public final class SidebarPanel: NSPanel {
         grabber.isHidden = !collapsedNow
         // Collapsed = quiet capsule handle: no border, tighter radius.
         visualEffect.layer?.borderWidth = collapsedNow ? 0 : 1
-        visualEffect.layer?.cornerRadius = collapsedNow ? 5 : 12
+        visualEffect.applyRoundedCorners(radius: collapsedNow ? 5 : 12)
         guard !collapsedNow else { return }
 
         stack.addArrangedSubview(chevronButton)

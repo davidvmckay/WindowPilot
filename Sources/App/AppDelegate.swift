@@ -757,6 +757,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         sidebar.render(pinned: pinnedSlots, dynamic: dynamicSlots, focusedWindowID: lastTrackedWindowID)
+
+        // Cold-start fill: capture screenshots for visible slots that have no
+        // cached thumbnail yet (same pattern as the carousel). After the first
+        // fill these are cache hits, so this is a no-op in steady state.
+        if hasScreenRecording {
+            let missingIDs = (pinnedSlots + dynamicSlots)
+                .compactMap { slot -> UInt32? in
+                    guard let window = slot.window,
+                          slot.thumbnail == nil,
+                          window.state != .minimized else { return nil }
+                    return window.id
+                }
+            if !missingIDs.isEmpty {
+                screenshotCache.refreshAsync(
+                    windowIDs: missingIDs,
+                    capture: { [weak self] wid in self?.capture.capture(windowID: wid) }
+                ) { [weak self] refreshed in
+                    self?.sidebar?.updateThumbnails(refreshed)
+                }
+            }
+        }
     }
 
     // MARK: - Status Item

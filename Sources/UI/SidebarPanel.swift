@@ -36,7 +36,9 @@ public final class SidebarPanel: NSPanel {
     public static let expandedWidth: CGFloat = 76
     public static let collapsedWidth: CGFloat = 8
     private static let slotHeight: CGFloat = 64
-    private static let slotSpacing: CGFloat = 4
+    private static let slotSpacing: CGFloat = 6
+    private static let contentPadding: CGFloat = 12   // breathing room above/below content
+    private static let edgeInset: CGFloat = 8         // gap between strip and screen edge when expanded
 
     // MARK: Callbacks
 
@@ -89,7 +91,10 @@ public final class SidebarPanel: NSPanel {
         visualEffect.blendingMode = .behindWindow
         visualEffect.state = .active
         visualEffect.wantsLayer = true
-        visualEffect.layer?.cornerRadius = 10
+        visualEffect.layer?.cornerRadius = 12
+        // Subtle hairline border lifts the strip off busy backgrounds.
+        visualEffect.layer?.borderWidth = 1
+        visualEffect.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.5).cgColor
         visualEffect.layer?.cornerCurve = .continuous
         visualEffect.layer?.masksToBounds = true
         contentView = visualEffect
@@ -182,7 +187,7 @@ public final class SidebarPanel: NSPanel {
         overflowButton.action = #selector(overflowTapped)
 
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: visualEffect.topAnchor, constant: 8),
+            stack.topAnchor.constraint(equalTo: visualEffect.topAnchor, constant: Self.contentPadding),
             stack.leadingAnchor.constraint(equalTo: visualEffect.leadingAnchor, constant: 4),
             stack.trailingAnchor.constraint(equalTo: visualEffect.trailingAnchor, constant: -4),
         ])
@@ -396,11 +401,16 @@ public final class SidebarPanel: NSPanel {
             height = 200
         } else {
             stack.layoutSubtreeIfNeeded()
-            height = stack.fittingSize.height + 16   // 8pt top + 8pt bottom margin
+            height = stack.fittingSize.height + Self.contentPadding * 2
         }
         let f = screen.visibleFrame
         setFrame(
-            NSRect(x: f.maxX - width, y: f.midY - height / 2, width: width, height: height),
+            // Expanded: float 8pt off the edge (refined look); collapsed: stay
+            // flush so the mouse can hit the hot edge.
+            NSRect(
+                x: f.maxX - width - (collapsedNow ? 0 : Self.edgeInset),
+                y: f.midY - height / 2, width: width, height: height
+            ),
             display: true
         )
     }

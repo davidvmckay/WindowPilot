@@ -549,8 +549,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.asyncAfter(deadline: .now() + checkDelay) {
                     if self.focuser.calculateSpaceNavigation(targetWindowID: info.id) != nil {
                         print("[WP] Ctrl+Arrow didn't work, falling back to exitCurrentFullScreen")
-                        _ = self.focuser.exitCurrentFullScreen(preferDisplayOfWindowID: info.id)
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
+                        let exited = self.focuser.exitCurrentFullScreen(preferDisplayOfWindowID: info.id)
+                        // Poll until the exited window leaves its type-4 full-screen
+                        // Space rather than guessing 0.55s. Timeout proceeds anyway.
+                        self.poll(timeout: 1.5, until: {
+                            exited.map { !self.focuser.isWindowOnFullScreenSpace(windowID: $0.windowID) } ?? true
+                        }) { exitedSpace in
+                            print("[WP] fullscreen→normal (fallback): full-screen Space \(exitedSpace ? "exited" : "poll timed out (1.5s), proceeding")")
                             if !self.focuser.focus(
                                 pid: info.ownerPID, windowID: info.id,
                                 windowTitle: info.title, state: info.state
@@ -575,8 +580,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 // Can't calculate direction — use exit approach
                 print("[WP] fullscreen→normal: exiting full-screen (no nav info)")
-                _ = focuser.exitCurrentFullScreen(preferDisplayOfWindowID: info.id)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
+                let exited = focuser.exitCurrentFullScreen(preferDisplayOfWindowID: info.id)
+                // Poll until the exited window leaves its type-4 full-screen Space
+                // rather than guessing 0.55s. Timeout proceeds best-effort anyway.
+                poll(timeout: 1.5, until: {
+                    exited.map { !self.focuser.isWindowOnFullScreenSpace(windowID: $0.windowID) } ?? true
+                }) { exitedSpace in
+                    print("[WP] fullscreen→normal: full-screen Space \(exitedSpace ? "exited" : "poll timed out (1.5s), proceeding")")
                     if !self.focuser.focus(
                         pid: info.ownerPID, windowID: info.id,
                         windowTitle: info.title, state: info.state
@@ -599,7 +609,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 _ = self.focuser.exitCurrentFullScreen(preferDisplayOfWindowID: info.id)
             }
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
+            // Poll until the CGS Space switch lands (no navigation needed) instead
+            // of guessing 0.28s; the exit above animates while we wait. Timeout
+            // proceeds best-effort exactly as the old fixed wait would have.
+            poll(timeout: 1.0, until: {
+                self.focuser.calculateSpaceNavigation(targetWindowID: info.id) == nil
+            }) { landed in
+                print("[WP] normal→fullscreen: space \(landed ? "switch landed" : "poll timed out (1.0s), proceeding")")
                 if !self.focuser.focus(
                     pid: info.ownerPID, windowID: info.id,
                     windowTitle: info.title, state: .normal
@@ -610,13 +626,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     pid: info.ownerPID, windowID: info.id,
                     windowTitle: info.title
                 )
-            }
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                self.focuser.reEnterFullScreen(
-                    pid: info.ownerPID, windowID: info.id,
-                    windowTitle: info.title
-                )
+                // Re-enter full-screen as a follow-on once the focus has settled.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    self.focuser.reEnterFullScreen(
+                        pid: info.ownerPID, windowID: info.id,
+                        windowTitle: info.title
+                    )
+                }
             }
 
         } else {
@@ -634,6 +650,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 )
             }
         }
+    }
+
+    /// Poll `condition` on the main queue every `interval` seconds until it holds
+    /// (invokes `completion(true)`) or `timeout` elapses (invokes `completion(false)`).
+    /// A best-effort readiness gate: the timeout branch lets callers proceed exactly
+    /// as a fixed delay would have, so behavior can only get more reliable, never
+    /// less. Reschedules via recursive `asyncAfter` rather than a retained Timer, so
+    /// nothing outlives its purpose — the chain ends the moment `completion` runs.
+    private func poll(
+        every interval: TimeInterval = 0.05,
+        timeout: TimeInterval,
+        until condition: @escaping () -> Bool,
+        then completion: @escaping (Bool) -> Void
+    ) {
+        let deadline = Date().addingTimeInterval(timeout)
+        func tick() {
+            if condition() {
+                completion(true)
+            } else if Date() >= deadline {
+                completion(false)
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + interval, execute: tick)
+            }
+        }
+        tick()
     }
 
     // MARK: - Sidebar Mode

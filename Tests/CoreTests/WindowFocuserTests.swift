@@ -145,4 +145,53 @@ final class WindowFocuserTests: XCTestCase {
             policy: .focus, windowID: 0, idMatchFound: false, titleMatchCount: 0)
         XCTAssertEqual(r, .failed)
     }
+
+    // MARK: - selectFullScreenDisplayIndex — pure display selection
+    //
+    // Chooses which display's full-screen Space `exitCurrentFullScreen` should
+    // exit. With a target window, prefer the display whose Space list holds the
+    // target's Space; otherwise fall back to the first full-screen display. No
+    // CGS/AX access — just the branching, so it is unit-testable in isolation.
+
+    // Target sits on the 2nd of two full-screen displays → pick the 2nd.
+    func test_selectFullScreenDisplay_target_on_second_fullscreen_display_picks_second() {
+        let displays = [
+            WindowFocuser.DisplaySpaceInfo(index: 0, spaceIDs: [100, 101], currentSpaceIsFullScreen: true),
+            WindowFocuser.DisplaySpaceInfo(index: 1, spaceIDs: [200, 201], currentSpaceIsFullScreen: true),
+        ]
+        let chosen = WindowFocuser.selectFullScreenDisplayIndex(displays: displays, targetSpaceIDs: [201])
+        XCTAssertEqual(chosen, 1)
+    }
+
+    // No full-screen display contains the target's Space → fall back to the
+    // first full-screen display (preserves the historic first-match behaviour).
+    func test_selectFullScreenDisplay_target_not_on_any_fullscreen_falls_back_to_first() {
+        let displays = [
+            WindowFocuser.DisplaySpaceInfo(index: 0, spaceIDs: [100, 101], currentSpaceIsFullScreen: true),
+            WindowFocuser.DisplaySpaceInfo(index: 1, spaceIDs: [200, 201], currentSpaceIsFullScreen: true),
+        ]
+        let chosen = WindowFocuser.selectFullScreenDisplayIndex(displays: displays, targetSpaceIDs: [999])
+        XCTAssertEqual(chosen, 0)
+    }
+
+    // No target (nil ⇒ empty target Spaces) → first full-screen display, skipping
+    // any leading non-full-screen displays.
+    func test_selectFullScreenDisplay_nil_target_picks_first_fullscreen() {
+        let displays = [
+            WindowFocuser.DisplaySpaceInfo(index: 0, spaceIDs: [100], currentSpaceIsFullScreen: false),
+            WindowFocuser.DisplaySpaceInfo(index: 1, spaceIDs: [200, 201], currentSpaceIsFullScreen: true),
+            WindowFocuser.DisplaySpaceInfo(index: 2, spaceIDs: [300], currentSpaceIsFullScreen: true),
+        ]
+        let chosen = WindowFocuser.selectFullScreenDisplayIndex(displays: displays, targetSpaceIDs: [])
+        XCTAssertEqual(chosen, 1)
+    }
+
+    // No display currently shows a full-screen Space → nothing to exit.
+    func test_selectFullScreenDisplay_no_fullscreen_returns_nil() {
+        let displays = [
+            WindowFocuser.DisplaySpaceInfo(index: 0, spaceIDs: [100], currentSpaceIsFullScreen: false),
+        ]
+        let chosen = WindowFocuser.selectFullScreenDisplayIndex(displays: displays, targetSpaceIDs: [100])
+        XCTAssertNil(chosen)
+    }
 }

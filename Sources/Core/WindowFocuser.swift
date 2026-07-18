@@ -388,81 +388,137 @@ public final class WindowFocuser: WindowFocusing {
         public let windowTitle: String
     }
 
-    /// Exit the full-screen window blocking the current display.
+    /// One display's Space membership, as needed to decide which full-screen
+    /// Space to exit. Pure value type — no CGS/AX handles.
+    struct DisplaySpaceInfo {
+        let index: Int                       // position in CGSCopyManagedDisplaySpaces
+        let spaceIDs: [UInt64]               // all Spaces belonging to this display
+        let currentSpaceIsFullScreen: Bool   // is its *current* Space full-screen?
+    }
+
+    /// Pure decision: which display's full-screen Space should `exitCurrentFullScreen`
+    /// exit. Among displays whose current Space is full-screen, prefer the one
+    /// whose Space list contains one of the target window's Spaces; otherwise
+    /// fall back to the first full-screen display (the historic behaviour). An
+    /// empty `targetSpaceIDs` (nil target) expresses no preference. Returns the
+    /// chosen display's `index`, or nil when no display's current Space is
+    /// full-screen. No CGS/AX access — unit-testable in isolation.
+    static func selectFullScreenDisplayIndex(
+        displays: [DisplaySpaceInfo],
+        targetSpaceIDs: [UInt64]
+    ) -> Int? {
+        let fullScreenDisplays = displays.filter { $0.currentSpaceIsFullScreen }
+        guard !fullScreenDisplays.isEmpty else { return nil }
+        if !targetSpaceIDs.isEmpty,
+           let preferred = fullScreenDisplays.first(where: { display in
+               display.spaceIDs.contains { targetSpaceIDs.contains($0) }
+           }) {
+            return preferred.index
+        }
+        return fullScreenDisplays.first?.index
+    }
+
+    /// Exit the full-screen window blocking a display. When `preferDisplayOfWindowID`
+    /// is given, among displays currently showing a full-screen Space the one
+    /// holding that window's Space is chosen — so a full-screen Space on the
+    /// *wrong* display isn't exited on a multi-display setup. Falls back to the
+    /// first full-screen display when no display matches (or the parameter is nil).
     /// Returns info about the exited window (for later re-entering full-screen).
-    public func exitCurrentFullScreen() -> ExitedFullScreenInfo? {
+    public func exitCurrentFullScreen(preferDisplayOfWindowID: UInt32? = nil) -> ExitedFullScreenInfo? {
         guard hasAccessibilityPermission() else { return nil }
         let cid = CGSMainConnectionID()
 
         guard let displaySpacesCF = CGSCopyManagedDisplaySpaces(cid),
               let displaySpaces = displaySpacesCF as? [[String: Any]] else { return nil }
 
-        for displayInfo in displaySpaces {
-            guard let currentSpaceInfo = displayInfo["Current Space"] as? [String: Any],
-                  let currentSpaceID = currentSpaceInfo["id64"] as? UInt64,
-                  CGSSpaceGetType(cid, currentSpaceID) == 4 else { continue }
+        // Resolve the target window's Space(s) so we can prefer its display when
+        // more than one display is currently showing a full-screen Space.
+        var targetSpaceIDs: [UInt64] = []
+        if let targetID = preferDisplayOfWindowID,
+           let targetSpacesCF = CGSCopySpacesForWindows(cid, 0x7, [targetID as NSNumber] as CFArray),
+           let ids = targetSpacesCF as? [UInt64] {
+            targetSpaceIDs = ids
+        }
 
-            // This display's current Space is full-screen. Find the window on it.
-            guard let windowList = CGWindowListCopyWindowInfo(
-                [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
-            ) as? [[String: Any]] else { continue }
+        // Build the pure decision input: each display's Space membership plus
+        // whether its current Space is full-screen.
+        let displayInfos: [DisplaySpaceInfo] = displaySpaces.enumerated().map { index, displayInfo in
+            let spaces = displayInfo["Spaces"] as? [[String: Any]] ?? []
+            let spaceIDs = spaces.compactMap { $0["id64"] as? UInt64 }
+            var currentIsFullScreen = false
+            if let currentSpaceInfo = displayInfo["Current Space"] as? [String: Any],
+               let currentSpaceID = currentSpaceInfo["id64"] as? UInt64 {
+                currentIsFullScreen = CGSSpaceGetType(cid, currentSpaceID) == 4
+            }
+            return DisplaySpaceInfo(index: index, spaceIDs: spaceIDs, currentSpaceIsFullScreen: currentIsFullScreen)
+        }
 
-            for winInfo in windowList {
-                guard let windowID = winInfo[kCGWindowNumber as String] as? CGWindowID,
-                      let pid = winInfo[kCGWindowOwnerPID as String] as? pid_t,
-                      let layer = winInfo[kCGWindowLayer as String] as? Int,
-                      layer == 0 else { continue }
+        guard let chosenIndex = Self.selectFullScreenDisplayIndex(
+            displays: displayInfos, targetSpaceIDs: targetSpaceIDs
+        ),
+        let currentSpaceInfo = displaySpaces[chosenIndex]["Current Space"] as? [String: Any],
+        let currentSpaceID = currentSpaceInfo["id64"] as? UInt64 else { return nil }
 
-                // Confirm this window is on the full-screen Space
-                guard let spacesCF = CGSCopySpacesForWindows(
-                    cid, 0x7, [windowID as NSNumber] as CFArray
-                ),
-                let spaceIDs = spacesCF as? [UInt64],
-                spaceIDs.contains(currentSpaceID) else { continue }
+        print("[WP] exitCurrentFullScreen: chose display idx=\(chosenIndex) target=\(preferDisplayOfWindowID.map(String.init) ?? "nil")")
 
-                // Un-fullscreen via AX
-                let appElement = AXUIElementCreateApplication(pid)
-                var windowsRef: CFTypeRef?
-                guard AXUIElementCopyAttributeValue(
-                    appElement, kAXWindowsAttribute as CFString, &windowsRef
-                ) == .success,
-                let axWindows = windowsRef as? [AXUIElement] else { continue }
+        // The chosen display's current Space is full-screen. Find the window on it.
+        guard let windowList = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+        ) as? [[String: Any]] else { return nil }
 
-                if let axWindow = findWindowByID(windowID, in: axWindows) {
-                    print("[WP] exitCurrentFullScreen: pid=\(pid) wid=\(windowID)")
+        for winInfo in windowList {
+            guard let windowID = winInfo[kCGWindowNumber as String] as? CGWindowID,
+                  let pid = winInfo[kCGWindowOwnerPID as String] as? pid_t,
+                  let layer = winInfo[kCGWindowLayer as String] as? Int,
+                  layer == 0 else { continue }
 
-                    // Before exiting full-screen, set the window's position/size
-                    // to near-fullscreen so it doesn't shrink to a small size.
-                    // Get the display's visible frame (excludes menu bar and Dock).
-                    if displayInfo["Display Identifier"] is String {
-                        // Use CGWindowList to get the screen size from the window's bounds
-                        if let bounds = winInfo[kCGWindowBounds as String] as? [String: CGFloat],
-                           let screenW = bounds["Width"],
-                           let screenH = bounds["Height"] {
-                            // Set AXPosition and AXSize to near-fullscreen
-                            // Leave 10px margin so it's clearly not full-screen
-                            var position = CGPoint(x: 5, y: 30)  // below menu bar
-                            var size = CGSize(width: screenW - 10, height: screenH - 10)
-                            if let posValue = AXValueCreate(.cgPoint, &position) {
-                                AXUIElementSetAttributeValue(axWindow, kAXPositionAttribute as CFString, posValue)
-                            }
-                            if let sizeValue = AXValueCreate(.cgSize, &size) {
-                                AXUIElementSetAttributeValue(axWindow, kAXSizeAttribute as CFString, sizeValue)
-                            }
-                            print("[WP] set window size to \(size.width)x\(size.height)")
-                        }
+            // Confirm this window is on the full-screen Space
+            guard let spacesCF = CGSCopySpacesForWindows(
+                cid, 0x7, [windowID as NSNumber] as CFArray
+            ),
+            let spaceIDs = spacesCF as? [UInt64],
+            spaceIDs.contains(currentSpaceID) else { continue }
+
+            // Un-fullscreen via AX
+            let appElement = AXUIElementCreateApplication(pid)
+            var windowsRef: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(
+                appElement, kAXWindowsAttribute as CFString, &windowsRef
+            ) == .success,
+            let axWindows = windowsRef as? [AXUIElement] else { continue }
+
+            if let axWindow = findWindowByID(windowID, in: axWindows) {
+                print("[WP] exitCurrentFullScreen: pid=\(pid) wid=\(windowID)")
+
+                // Before exiting full-screen, set position/size to near-fullscreen
+                // so it doesn't shrink. A full-screen window's CG bounds cover its
+                // own display, so its bounds ORIGIN is that display's origin —
+                // anchor to it (not a global (5,30)) so a secondary-display window
+                // stays on its own display instead of teleporting to the primary.
+                if let bounds = winInfo[kCGWindowBounds as String] as? [String: CGFloat],
+                   let originX = bounds["X"], let originY = bounds["Y"],
+                   let screenW = bounds["Width"], let screenH = bounds["Height"] {
+                    // Leave a 10px margin so it's clearly not full-screen.
+                    var position = CGPoint(x: originX + 5, y: originY + 30)  // below menu bar, on its own display
+                    var size = CGSize(width: screenW - 10, height: screenH - 10)
+                    if let posValue = AXValueCreate(.cgPoint, &position) {
+                        AXUIElementSetAttributeValue(axWindow, kAXPositionAttribute as CFString, posValue)
                     }
-
-                    AXUIElementSetAttributeValue(
-                        axWindow, "AXFullScreen" as CFString, false as CFTypeRef
-                    )
-                    let title = (winInfo[kCGWindowName as String] as? String)
-                        ?? (winInfo[kCGWindowOwnerName as String] as? String)
-                        ?? ""
-                    return ExitedFullScreenInfo(
-                        pid: pid, windowID: windowID, windowTitle: title
-                    )
+                    if let sizeValue = AXValueCreate(.cgSize, &size) {
+                        AXUIElementSetAttributeValue(axWindow, kAXSizeAttribute as CFString, sizeValue)
+                    }
+                    print("[WP] set window origin to \(position.x),\(position.y) size to \(size.width)x\(size.height)")
                 }
+
+                AXUIElementSetAttributeValue(
+                    axWindow, "AXFullScreen" as CFString, false as CFTypeRef
+                )
+                let title = (winInfo[kCGWindowName as String] as? String)
+                    ?? (winInfo[kCGWindowOwnerName as String] as? String)
+                    ?? ""
+                return ExitedFullScreenInfo(
+                    pid: pid, windowID: windowID, windowTitle: title
+                )
             }
         }
         return nil

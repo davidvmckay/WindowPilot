@@ -549,7 +549,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.asyncAfter(deadline: .now() + checkDelay) {
                     if self.focuser.calculateSpaceNavigation(targetWindowID: info.id) != nil {
                         print("[WP] Ctrl+Arrow didn't work, falling back to exitCurrentFullScreen")
-                        _ = self.focuser.exitCurrentFullScreen()
+                        _ = self.focuser.exitCurrentFullScreen(preferDisplayOfWindowID: info.id)
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
                             if !self.focuser.focus(
                                 pid: info.ownerPID, windowID: info.id,
@@ -575,7 +575,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 // Can't calculate direction — use exit approach
                 print("[WP] fullscreen→normal: exiting full-screen (no nav info)")
-                _ = focuser.exitCurrentFullScreen()
+                _ = focuser.exitCurrentFullScreen(preferDisplayOfWindowID: info.id)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
                     if !self.focuser.focus(
                         pid: info.ownerPID, windowID: info.id,
@@ -596,7 +596,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                _ = self.focuser.exitCurrentFullScreen()
+                _ = self.focuser.exitCurrentFullScreen(preferDisplayOfWindowID: info.id)
             }
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {

@@ -57,16 +57,17 @@ restore_version_swift() {
     rm -f "$VERSION_SWIFT_BACKUP"
   fi
 }
+# Both ERR and EXIT, for BOTH dry and real runs: bash's ERR trap does not
+# fire on an explicit `exit N` (only on a command's own nonzero exit under
+# set -e), and this script has explicit exits after this point (Sparkle
+# framework missing, wrong-branch refusal) — EXIT is what catches those.
 # DRY_RUN never commits the stamp, so restore on ANY exit (success or
 # failure) to leave the tree clean. Real runs only need to restore on
-# failure BEFORE the commit lands — the trap is disarmed in step 8 right
-# after the commit succeeds, since the commit is then the source of truth
-# and restoring afterward would just make the working tree diverge from HEAD.
-if [ "${DRY_RUN:-0}" = "1" ]; then
-  trap restore_version_swift ERR EXIT
-else
-  trap restore_version_swift ERR
-fi
+# failure BEFORE the commit lands — the trap is disarmed (both ERR and
+# EXIT) in step 8 right after the commit succeeds, since the commit is then
+# the source of truth and restoring afterward would just make the working
+# tree diverge from HEAD.
+trap restore_version_swift ERR EXIT
 sed -i '' "s/let cliVersion = \".*\"/let cliVersion = \"${VERSION}\"/" Sources/CLI/Version.swift
 swift build -c release
 
@@ -171,7 +172,7 @@ if [ "${DRY_RUN:-0}" != "1" ]; then
     git add Sources/CLI/Version.swift
     git commit -m "Stamp CLI version ${VERSION}" -- Sources/CLI/Version.swift
   fi
-  trap - ERR
+  trap - ERR EXIT
   rm -f "$VERSION_SWIFT_BACKUP"
   # Push source FIRST — otherwise gh tags the remote's stale HEAD and the
   # release changelog points at pre-release code.

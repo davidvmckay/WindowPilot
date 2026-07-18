@@ -61,6 +61,11 @@ public final class WindowEnumerator: WindowEnumerating {
             allEntries.append((entry, tag))
         }
 
+        // Snapshot the Q1 (on-screen) window IDs before the Q2 merge so the AX-failure
+        // fallback in detectMinimized can tell on-screen candidates (keep) from
+        // off-screen ones (re-droppable when untitled).
+        let onScreenIDs = seenIDs
+
         // ── Q2: ALL windows — find off-screen windows (other Spaces, minimized, etc.) ──
         let allList = Self.queryWindows(options: [.excludeDesktopElements])
         Self.appendOffScreenEntries(
@@ -70,11 +75,12 @@ public final class WindowEnumerator: WindowEnumerating {
             seenIDs: &seenIDs,
             into: &allEntries
         )
+        let offScreenIDs = seenIDs.subtracting(onScreenIDs)
 
         // ── Post-Q2: detect minimized windows via Accessibility ──
         // Off-screen windows with empty tags could be minimized or on another Space.
         // Use AX to check kAXMinimizedAttribute for accurate detection.
-        Self.detectMinimized(&allEntries)
+        Self.detectMinimized(&allEntries, offScreenIDs: offScreenIDs)
 
         // ── Build AppNodes ──
         return Self.buildAppNodes(from: allEntries)
@@ -124,12 +130,50 @@ public final class WindowEnumerator: WindowEnumerating {
     @_silgen_name("_AXUIElementGetWindow") @discardableResult
     private static func _AXUIElementGetWindow(_ el: AXUIElement, _ wid: UnsafeMutablePointer<CGWindowID>) -> AXError
 
+    /// Real AX provider: returns each of the app's AX windows paired with its CGWindowID
+    /// and minimized state, or `nil` when the `kAXWindowsAttribute` query fails outright
+    /// (standalone helper/XPC processes — CursorUIViewService, AutoFill panels — expose no
+    /// AX window list). This is the seam `detectMinimized` injects so its ✕/○-producing
+    /// logic is unit-testable without a live Accessibility session.
+    static func realAXWindows(_ pid: pid_t) -> [(id: UInt32, isMinimized: Bool)]? {
+        let appElement = AXUIElementCreateApplication(pid)
+        var windowsRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+              let axWindows = windowsRef as? [AXUIElement] else { return nil }
+
+        var result: [(id: UInt32, isMinimized: Bool)] = []
+        for axWindow in axWindows {
+            var wid: CGWindowID = 0
+            guard _AXUIElementGetWindow(axWindow, &wid) == .success else { continue }
+
+            var isMin: CFTypeRef?
+            let minimized = AXUIElementCopyAttributeValue(axWindow, kAXMinimizedAttribute as CFString, &isMin) == .success
+                && (isMin as? Bool) == true
+            result.append((id: wid, isMinimized: minimized))
+        }
+        return result
+    }
+
     /// Check off-screen windows via Accessibility API:
     /// - Tag minimized windows with "○"
     /// - Tag ghost windows (CG window exists but no AX window) with "✕"
     ///   Ghost windows are internal rendering surfaces (e.g. Ghostty zellij tabs)
     ///   that can't be focused.
-    private static func detectMinimized(_ entries: inout [(entry: [String: Any], tag: String)]) {
+    ///
+    /// When the AX window-list query FAILS for an app (`axWindows` returns nil), we cannot
+    /// tell ghost from real. We then re-drop only the narrow subset the pre-Task-4 name
+    /// guard used to drop: candidate entries that are BOTH untitled AND off-screen. Titled
+    /// entries and on-screen entries are kept unchanged — so the result is never worse than
+    /// pre-fix and is strictly better whenever AX succeeds.
+    ///
+    /// `axWindows` is an injectable seam (defaults to `realAXWindows`); `offScreenIDs` is
+    /// the set of Q2-admitted (off-screen) window IDs, computed at the call site so the
+    /// fallback can distinguish on-screen candidates that must be kept.
+    static func detectMinimized(
+        _ entries: inout [(entry: [String: Any], tag: String)],
+        offScreenIDs: Set<UInt32>,
+        axWindows: (pid_t) -> [(id: UInt32, isMinimized: Bool)]? = realAXWindows
+    ) {
         // Collect PIDs that have untagged off-screen windows (candidates for minimized)
         var candidatesByPID: [Int32: [Int]] = [:]  // pid → indices in entries
         for (i, item) in entries.enumerated() {
@@ -141,24 +185,28 @@ public final class WindowEnumerator: WindowEnumerating {
 
         // For each app, query AX for minimized windows and match by CGWindowID
         for (pid, indices) in candidatesByPID {
-            let appElement = AXUIElementCreateApplication(pid)
-            var windowsRef: CFTypeRef?
-            guard AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef) == .success,
-                  let axWindows = windowsRef as? [AXUIElement] else { continue }
+            guard let axList = axWindows(pid) else {
+                // AX query FAILED for this app — cannot distinguish ghost from real.
+                // Lattice-safe fallback: re-drop only the subset the pre-Task-4 name
+                // guard dropped anyway — candidates that are BOTH untitled AND off-screen.
+                // Titled and on-screen candidates are kept unchanged.
+                for i in indices {
+                    let wid = windowID(from: entries[i].entry)
+                    guard offScreenIDs.contains(wid) else { continue }  // on-screen → keep
+                    let name = entries[i].entry[kWindowName] as? String
+                    if name == nil || name!.isEmpty {
+                        entries[i].tag = "✕"  // untitled + off-screen + AX-failed → drop
+                    }
+                }
+                continue
+            }
 
             // Build sets of all AX window IDs and minimized IDs
             var allAXIDs = Set<UInt32>()
             var minimizedIDs = Set<UInt32>()
-            for axWindow in axWindows {
-                var wid: CGWindowID = 0
-                guard _AXUIElementGetWindow(axWindow, &wid) == .success else { continue }
-                allAXIDs.insert(wid)
-
-                var isMin: CFTypeRef?
-                if AXUIElementCopyAttributeValue(axWindow, kAXMinimizedAttribute as CFString, &isMin) == .success,
-                   (isMin as? Bool) == true {
-                    minimizedIDs.insert(wid)
-                }
+            for w in axList {
+                allAXIDs.insert(w.id)
+                if w.isMinimized { minimizedIDs.insert(w.id) }
             }
 
             // Tag matching entries

@@ -271,4 +271,78 @@ final class OffScreenEnumerationTests: XCTestCase {
                        "Off-screen window with AX presence but no name → 'Untitled'")
         XCTAssertEqual(nodes.first?.windows.first?.state, .normal)
     }
+
+    // MARK: - detectMinimized AX seam
+
+    // The AX-query-failure gap: when an app's kAXWindowsAttribute query fails outright
+    // (standalone helper/XPC processes like CursorUIViewService, AutoFill panels), none
+    // of its entries were tagged, so untitled off-screen junk leaked in as "Untitled".
+    // The fix re-drops ONLY the narrow subset the pre-Task-4 name guard dropped:
+    // entries that are BOTH untitled AND off-screen. The `axWindows` closure is the
+    // injected seam (nil return = AX query failed); `offScreenIDs` names the Q2 set.
+
+    // Case 1: AX fails + untitled off-screen entry → tagged ✕ (excluded by buildAppNodes).
+    func test_detectMinimized_axFailure_dropsUntitledOffScreen() {
+        let entry = cgEntry(id: 900, pid: 9001, ownerName: "CursorUIViewService", name: nil)
+        var entries: [(entry: [String: Any], tag: String)] = [(entry, "")]
+
+        WindowEnumerator.detectMinimized(
+            &entries, offScreenIDs: [900], axWindows: { _ in nil })
+
+        XCTAssertEqual(entries.first?.tag, "✕",
+                       "Untitled off-screen entry from an AX-failed app must be tagged ✕")
+        XCTAssertTrue(WindowEnumerator.buildAppNodes(from: entries).isEmpty,
+                      "…and therefore excluded by buildAppNodes")
+    }
+
+    // Case 2: AX fails + titled off-screen entry → kept (cross-Space promise untouched).
+    func test_detectMinimized_axFailure_keepsTitledOffScreen() {
+        let entry = cgEntry(id: 901, pid: 9001, ownerName: "Obsidian", name: "Daily Note")
+        var entries: [(entry: [String: Any], tag: String)] = [(entry, "")]
+
+        WindowEnumerator.detectMinimized(
+            &entries, offScreenIDs: [901], axWindows: { _ in nil })
+
+        XCTAssertEqual(entries.first?.tag, "",
+                       "Titled off-screen entry from an AX-failed app must be kept")
+        XCTAssertEqual(WindowEnumerator.buildAppNodes(from: entries).count, 1)
+    }
+
+    // Case 3: AX fails + untitled ON-screen entry → kept (only off-screen is re-dropped).
+    func test_detectMinimized_axFailure_keepsUntitledOnScreen() {
+        let entry = cgEntry(id: 902, pid: 9001, ownerName: "SomeApp", name: nil)
+        var entries: [(entry: [String: Any], tag: String)] = [(entry, "")]
+
+        WindowEnumerator.detectMinimized(
+            &entries, offScreenIDs: [], axWindows: { _ in nil })  // 902 not off-screen
+
+        XCTAssertEqual(entries.first?.tag, "",
+                       "Untitled on-screen candidate must be kept even when AX fails")
+    }
+
+    // Case 4: AX succeeds but omits the window → ghost ✕ (existing Case B via the seam).
+    func test_detectMinimized_axSuccess_omittedWindowIsGhost() {
+        let entry = cgEntry(id: 903, pid: 9001, ownerName: "Ghostty", name: nil)
+        var entries: [(entry: [String: Any], tag: String)] = [(entry, "")]
+
+        WindowEnumerator.detectMinimized(
+            &entries, offScreenIDs: [903], axWindows: { _ in [] })  // AX ok, no windows
+
+        XCTAssertEqual(entries.first?.tag, "✕",
+                       "AX present but window omitted → ghost ✕")
+    }
+
+    // Case 5: AX succeeds and reports the window minimized → ○.
+    func test_detectMinimized_axSuccess_minimizedWindow() {
+        let entry = cgEntry(id: 904, pid: 9001, ownerName: "Terminal", name: "bash")
+        var entries: [(entry: [String: Any], tag: String)] = [(entry, "")]
+
+        WindowEnumerator.detectMinimized(
+            &entries, offScreenIDs: [904],
+            axWindows: { _ in [(id: 904, isMinimized: true)] })
+
+        XCTAssertEqual(entries.first?.tag, "○", "AX reports minimized → ○")
+        let nodes = WindowEnumerator.buildAppNodes(from: entries)
+        XCTAssertEqual(nodes.first?.windows.first?.state, .minimized)
+    }
 }

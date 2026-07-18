@@ -87,4 +87,30 @@ final class WindowSnapshotTests: XCTestCase {
             WindowSnapshot.hasLayerZeroWindowCovering(in: entries, displayFrame: .zero)
         )
     }
+
+    func testExcludedPIDWindowDoesNotCount() {
+        // A full-covering layer-0 window owned by our own PID must NOT register
+        // as the covering surface once excluded — the coverage guarantee is the
+        // layer-0 filter PLUS the PID exclusion, not the "our windows never sit
+        // at layer 0" invariant. Without the exclusion the same entry covers.
+        let ownPID: Int32 = 999
+        let entries = [entry(display, id: 7, pid: ownPID)]
+        XCTAssertTrue(
+            WindowSnapshot.hasLayerZeroWindowCovering(in: entries, displayFrame: display)
+        )
+        XCTAssertFalse(
+            WindowSnapshot.hasLayerZeroWindowCovering(
+                in: entries, displayFrame: display, excludingPID: ownPID
+            )
+        )
+    }
+
+    // MARK: - Snapshot lookup
+
+    func testEntryLookupByWindowID() {
+        let a = entry(display, id: 1, pid: 100)
+        let b = entry(CGRect(x: 0, y: 0, width: 10, height: 10), id: 2, pid: 200)
+        XCTAssertEqual(WindowSnapshot.entry(forWindowID: 2, in: [a, b]), b)
+        XCTAssertNil(WindowSnapshot.entry(forWindowID: 99, in: [a, b]))
+    }
 }

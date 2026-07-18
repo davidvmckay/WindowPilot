@@ -451,16 +451,15 @@ public final class WindowFocuser: WindowFocusing {
 
         print("[WP] exitCurrentFullScreen: chose display idx=\(chosenIndex) target=\(preferDisplayOfWindowID.map(String.init) ?? "nil")")
 
-        // The chosen display's current Space is full-screen. Find the window on it.
-        guard let windowList = CGWindowListCopyWindowInfo(
-            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
-        ) as? [[String: Any]] else { return nil }
+        // The chosen display's current Space is full-screen. Find the window on
+        // it. Same on-screen fetch (layer-0 + space-membership semantics), now
+        // routed through the wrapped snapshot seam instead of a raw CG call.
+        let windowList = WindowSnapshot.onScreenWindows()
 
         for winInfo in windowList {
-            guard let windowID = winInfo[kCGWindowNumber as String] as? CGWindowID,
-                  let pid = winInfo[kCGWindowOwnerPID as String] as? pid_t,
-                  let layer = winInfo[kCGWindowLayer as String] as? Int,
-                  layer == 0 else { continue }
+            let windowID = winInfo.id
+            let pid = winInfo.pid
+            guard winInfo.layer == 0 else { continue }
 
             // Confirm this window is on the full-screen Space
             guard let spacesCF = CGSCopySpacesForWindows(
@@ -485,27 +484,23 @@ public final class WindowFocuser: WindowFocusing {
                 // own display, so its bounds ORIGIN is that display's origin —
                 // anchor to it (not a global (5,30)) so a secondary-display window
                 // stays on its own display instead of teleporting to the primary.
-                if let bounds = winInfo[kCGWindowBounds as String] as? [String: CGFloat],
-                   let originX = bounds["X"], let originY = bounds["Y"],
-                   let screenW = bounds["Width"], let screenH = bounds["Height"] {
-                    // Leave a 10px margin so it's clearly not full-screen.
-                    var position = CGPoint(x: originX + 5, y: originY + 30)  // below menu bar, on its own display
-                    var size = CGSize(width: screenW - 10, height: screenH - 10)
-                    if let posValue = AXValueCreate(.cgPoint, &position) {
-                        AXUIElementSetAttributeValue(axWindow, kAXPositionAttribute as CFString, posValue)
-                    }
-                    if let sizeValue = AXValueCreate(.cgSize, &size) {
-                        AXUIElementSetAttributeValue(axWindow, kAXSizeAttribute as CFString, sizeValue)
-                    }
-                    print("[WP] set window origin to \(position.x),\(position.y) size to \(size.width)x\(size.height)")
+                let originX = winInfo.bounds.minX, originY = winInfo.bounds.minY
+                let screenW = winInfo.bounds.width, screenH = winInfo.bounds.height
+                // Leave a 10px margin so it's clearly not full-screen.
+                var position = CGPoint(x: originX + 5, y: originY + 30)  // below menu bar, on its own display
+                var size = CGSize(width: screenW - 10, height: screenH - 10)
+                if let posValue = AXValueCreate(.cgPoint, &position) {
+                    AXUIElementSetAttributeValue(axWindow, kAXPositionAttribute as CFString, posValue)
                 }
+                if let sizeValue = AXValueCreate(.cgSize, &size) {
+                    AXUIElementSetAttributeValue(axWindow, kAXSizeAttribute as CFString, sizeValue)
+                }
+                print("[WP] set window origin to \(position.x),\(position.y) size to \(size.width)x\(size.height)")
 
                 AXUIElementSetAttributeValue(
                     axWindow, "AXFullScreen" as CFString, false as CFTypeRef
                 )
-                let title = (winInfo[kCGWindowName as String] as? String)
-                    ?? (winInfo[kCGWindowOwnerName as String] as? String)
-                    ?? ""
+                let title = winInfo.title
                 return ExitedFullScreenInfo(
                     pid: pid, windowID: windowID, windowTitle: title
                 )

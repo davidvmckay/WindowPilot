@@ -407,10 +407,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // `suppressedForFullscreen == true` would keep the strip invisible
         // until focus moved to a different window. See the method doc for the
         // bounded cost (skipped entirely when no sidebar exists).
-        refreshSidebarFullscreenSuppression(windowID: windowID, axWindow: axWindow)
+        // One .optionAll snapshot per invocation, shared by the suppression
+        // helper (just below) and the transient small-window check (further
+        // down) — so a focus-change tick performs a single CGWindowList fetch,
+        // not two. Fetched only when it will actually be read: a sidebar exists
+        // (suppression) OR the focused window changed (transient check). The
+        // no-sidebar unchanged-window path stays fetch-free, exactly as before.
+        let windowChanged = windowID != lastTrackedWindowID
+        let snapshot: [WindowSnapshotEntry]? =
+            (sidebar != nil || windowChanged) ? WindowSnapshot.allWindows() : nil
+
+        refreshSidebarFullscreenSuppression(
+            windowID: windowID, axWindow: axWindow, snapshot: snapshot
+        )
 
         // Skip if same window is still focused (avoid redundant updates from timer)
-        guard windowID != lastTrackedWindowID else { return }
+        guard windowChanged else { return }
         previousFocusedWindowID = lastTrackedWindowID
         lastTrackedWindowID = windowID
 
@@ -439,20 +451,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // 3. Small windows → transient (popups, banners, notifications). The
-        //    window bounds for the sidebar's fullscreen suppression are fetched
-        //    separately, above the same-window guard (see
-        //    refreshSidebarFullscreenSuppression) so suppression stays fresh on
-        //    in-place fullscreen toggles.
-        if let windowList = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] {
-            for info in windowList {
-                guard let wid = info[kCGWindowNumber as String] as? CGWindowID,
-                      wid == windowID,
-                      let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
-                      let w = bounds["Width"], let h = bounds["Height"] else { continue }
-                if !isTransient, w < 200 || h < 100 { isTransient = true }
-                break
-            }
+        // 3. Small windows → transient (popups, banners, notifications). Reuses
+        //    the shared per-tick snapshot fetched above (also feeding
+        //    refreshSidebarFullscreenSuppression) so this focus-change tick makes
+        //    a single .optionAll fetch, not two. Guaranteed non-nil here — the
+        //    same-window guard we just passed implies windowChanged, which forced
+        //    the fetch.
+        if let entry = snapshot.flatMap({ WindowSnapshot.entry(forWindowID: windowID, in: $0) }) {
+            if !isTransient, entry.bounds.width < 200 || entry.bounds.height < 100 { isTransient = true }
         }
 
         // Check fullscreen state
@@ -498,10 +504,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// is unchanged, but suppression freshness is in tension with that: a window
     /// toggling fullscreen in place keeps the same ID, so this must run on every
     /// tick to catch it. Cost is bounded and deliberately paid only when a
-    /// sidebar exists — at most one CGWindowListCopyWindowInfo fetch plus one AX
-    /// read (2s cadence). With no sidebar this returns before any of that work,
-    /// keeping the unchanged-path cost identical to before.
-    private func refreshSidebarFullscreenSuppression(windowID: CGWindowID, axWindow: AXUIElement) {
+    /// sidebar exists — one AX read plus a lookup in the shared per-tick
+    /// `.optionAll` snapshot `trackFocusedWindow` passes in (2s cadence). With no
+    /// sidebar this returns before reading either, keeping the unchanged-path
+    /// cost identical to before.
+    private func refreshSidebarFullscreenSuppression(
+        windowID: CGWindowID, axWindow: AXUIElement, snapshot: [WindowSnapshotEntry]?
+    ) {
         guard let sidebar else { return }
 
         // Live fullscreen state of the focused window (one AX read).
@@ -510,18 +519,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             axWindow, "AXFullScreen" as CFString, &fsRef
         ) == .success && (fsRef as? Bool) == true
 
-        // Live bounds of the focused window (one CG fetch); nil if not listed.
-        var focusedWindowBounds: CGRect?
-        if let windowList = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] {
-            for info in windowList {
-                guard let wid = info[kCGWindowNumber as String] as? CGWindowID,
-                      wid == windowID,
-                      let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
-                      let w = bounds["Width"], let h = bounds["Height"] else { continue }
-                focusedWindowBounds = CGRect(x: bounds["X"] ?? 0, y: bounds["Y"] ?? 0, width: w, height: h)
-                break
-            }
-        }
+        // Live bounds of the focused window from the shared per-tick snapshot;
+        // nil if not listed. (Non-nil snapshot guaranteed here: it was fetched
+        // whenever a sidebar exists.)
+        let focusedWindowBounds = snapshot
+            .flatMap { WindowSnapshot.entry(forWindowID: windowID, in: $0) }?.bounds
 
         // Hide the strip only when the focused window is fullscreen AND overlaps
         // the strip's display. CG bounds are top-left-origin; NSScreen frames
@@ -559,7 +561,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func clearFullscreenSuppressionIfUncovered() {
         guard let sidebar else { return }
         let cgDisplayFrame = stripDisplayCGFrame(for: sidebar)
-        if !WindowSnapshot.hasLayerZeroWindowCovering(displayFrame: cgDisplayFrame) {
+        // Exclude our own PID so the coverage check never counts one of our own
+        // windows as the covering surface — the guarantee is the layer-0 filter
+        // PLUS this exclusion, not the implicit "our windows sit above layer 0".
+        let ownPID = Int32(ProcessInfo.processInfo.processIdentifier)
+        if !WindowSnapshot.hasLayerZeroWindowCovering(
+            displayFrame: cgDisplayFrame, excludingPID: ownPID
+        ) {
             sidebar.setHiddenForFullscreen(false)
         }
     }

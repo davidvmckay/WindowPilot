@@ -1,6 +1,6 @@
 import CoreGraphics
 
-/// One on-screen window from a single CGWindowList snapshot.
+/// One window from a single CGWindowList snapshot.
 ///
 /// `bounds` are in CoreGraphics **global** coordinates: top-left origin, Y
 /// increasing downward — the SAME space `CGDisplayBounds` reports. (Cocoa's
@@ -10,66 +10,105 @@ import CoreGraphics
 ///
 /// `layer` 0 is the normal application-window layer; higher layers are system
 /// UI (menu bar, Dock, notifications, etc.).
+///
+/// `title` is the `kCGWindowName` value with a `kCGWindowOwnerName` fallback
+/// (empty string when neither is present, e.g. no Screen Recording permission);
+/// only the on-screen full-screen-exit path reads it.
 public struct WindowSnapshotEntry: Equatable {
     public let id: UInt32
     public let pid: Int32
     public let bounds: CGRect
     public let layer: Int
+    public let title: String
 
-    public init(id: UInt32, pid: Int32, bounds: CGRect, layer: Int) {
+    public init(id: UInt32, pid: Int32, bounds: CGRect, layer: Int, title: String = "") {
         self.id = id
         self.pid = pid
         self.bounds = bounds
         self.layer = layer
+        self.title = title
     }
 }
 
 /// Wrapped CGWindowList access — the shared window-snapshot seam the App/UI
 /// layers use instead of calling CoreGraphics window APIs directly (see the
-/// "All CG calls are wrapped" architecture rule). Deliberately minimal for now;
-/// Task 6 extends it to absorb the remaining raw CGWindowList call sites.
+/// "All CG calls are wrapped" architecture rule). Deliberately minimal: it
+/// carries only the fields the wrapped call sites read.
 public enum WindowSnapshot {
 
     private static let kLayer = kCGWindowLayer as String
     private static let kOwnerPID = kCGWindowOwnerPID as String
+    private static let kOwnerName = kCGWindowOwnerName as String
+    private static let kWindowName = kCGWindowName as String
     private static let kWindowNumber = kCGWindowNumber as String
     private static let kBounds = kCGWindowBounds as String
 
     /// One CGWindowList fetch of the currently on-screen application windows
     /// (desktop wallpaper/icons excluded). Bounds are CG global top-left coords.
-    public static func onScreenWindows() -> [WindowSnapshotEntry] {
+    ///
+    /// `excludingPID` drops windows owned by that process (our own PID at the
+    /// suppression-clear call site) so a coverage decision never counts our own
+    /// windows — the guarantee is the layer-0 filter PLUS this PID exclusion,
+    /// not the implicit "all our windows sit above layer 0" invariant.
+    public static func onScreenWindows(excludingPID: Int32? = nil) -> [WindowSnapshotEntry] {
         let list = CGWindowListCopyWindowInfo(
             [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+        ) as? [[String: Any]] ?? []
+        return list.compactMap(entry(from:)).filter {
+            excludingPID == nil || $0.pid != excludingPID
+        }
+    }
+
+    /// One CGWindowList fetch of ALL windows (`.optionAll` — on- and off-screen,
+    /// every layer). The focus tracker takes a single such snapshot per tick and
+    /// looks up individual windows in it via `entry(forWindowID:in:)`.
+    public static func allWindows() -> [WindowSnapshotEntry] {
+        let list = CGWindowListCopyWindowInfo(
+            [.optionAll], kCGNullWindowID
         ) as? [[String: Any]] ?? []
         return list.compactMap(entry(from:))
     }
 
+    /// Pure lookup (no CG calls): the entry for `id` in an already-fetched
+    /// snapshot, or `nil` when absent. Window IDs are unique, so the first match
+    /// is the only match.
+    public static func entry(forWindowID id: UInt32, in entries: [WindowSnapshotEntry]) -> WindowSnapshotEntry? {
+        entries.first { $0.id == id }
+    }
+
     /// True when a fresh snapshot contains a layer-0 window covering
     /// `displayFrame`. Convenience wrapper over the pure predicate that
-    /// performs the CGWindowList fetch.
+    /// performs the CGWindowList fetch, excluding `excludingPID` at the source.
     ///
     /// `displayFrame` MUST be in CG global coordinates (e.g. `CGDisplayBounds`
     /// of the target display) so it shares the snapshot's coordinate space —
     /// no Cocoa Y-flip happens here or in the predicate. A degenerate frame
     /// (zero width/height, e.g. an unresolved display) yields `false`.
     public static func hasLayerZeroWindowCovering(
-        displayFrame: CGRect, coverage: CGFloat = 0.97
+        displayFrame: CGRect, coverage: CGFloat = 0.97, excludingPID: Int32? = nil
     ) -> Bool {
         hasLayerZeroWindowCovering(
-            in: onScreenWindows(), displayFrame: displayFrame, coverage: coverage
+            in: onScreenWindows(excludingPID: excludingPID),
+            displayFrame: displayFrame, coverage: coverage
         )
     }
 
     /// Pure coverage predicate (no CG calls): `true` iff some entry on layer 0
-    /// overlaps `displayFrame` by at least `coverage` of the display's area.
-    /// Both `entries` bounds and `displayFrame` are assumed CG global coords, so
-    /// the overlap is a direct rect intersection with no coordinate flipping.
+    /// (and not owned by `excludingPID`) overlaps `displayFrame` by at least
+    /// `coverage` of the display's area. Both `entries` bounds and `displayFrame`
+    /// are assumed CG global coords, so the overlap is a direct rect intersection
+    /// with no coordinate flipping. The convenience overload above filters
+    /// `excludingPID` at fetch time and leaves this defaulted to `nil`; the
+    /// parameter keeps the exclusion expressible (and unit-testable) for callers
+    /// that pass unfiltered entries directly.
     static func hasLayerZeroWindowCovering(
-        in entries: [WindowSnapshotEntry], displayFrame: CGRect, coverage: CGFloat = 0.97
+        in entries: [WindowSnapshotEntry], displayFrame: CGRect,
+        coverage: CGFloat = 0.97, excludingPID: Int32? = nil
     ) -> Bool {
         guard displayFrame.width > 0, displayFrame.height > 0 else { return false }
         let displayArea = displayFrame.width * displayFrame.height
-        for entry in entries where entry.layer == 0 {
+        for entry in entries
+        where entry.layer == 0 && (excludingPID == nil || entry.pid != excludingPID) {
             let overlap = entry.bounds.intersection(displayFrame)
             guard !overlap.isNull else { continue }
             if overlap.width * overlap.height >= coverage * displayArea { return true }
@@ -87,6 +126,8 @@ public enum WindowSnapshot {
         let pid = info[kOwnerPID] as? Int32
             ?? (info[kOwnerPID] as? Int).map { Int32($0) } ?? -1
         let layer = info[kLayer] as? Int ?? -1
-        return WindowSnapshotEntry(id: id, pid: pid, bounds: bounds, layer: layer)
+        let title = (info[kWindowName] as? String)
+            ?? (info[kOwnerName] as? String) ?? ""
+        return WindowSnapshotEntry(id: id, pid: pid, bounds: bounds, layer: layer, title: title)
     }
 }

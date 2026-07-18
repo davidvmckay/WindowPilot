@@ -599,7 +599,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 pid: info.ownerPID, windowID: info.id,
                                 windowTitle: info.title, state: info.state
                             ) {
-                                onSuccess?()
+                                DispatchQueue.main.async { onSuccess?() }
                             } else {
                                 ToastHUD.show("Couldn't focus \"\(info.title)\" — it may have closed")
                             }
@@ -610,7 +610,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             pid: info.ownerPID, windowID: info.id,
                             windowTitle: info.title, state: info.state
                         ) {
-                            onSuccess?()
+                            DispatchQueue.main.async { onSuccess?() }
                         } else {
                             ToastHUD.show("Couldn't focus \"\(info.title)\" — it may have closed")
                         }
@@ -634,7 +634,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         pid: info.ownerPID, windowID: info.id,
                         windowTitle: info.title, state: info.state
                     ) {
-                        onSuccess?()
+                        DispatchQueue.main.async { onSuccess?() }
                     } else {
                         ToastHUD.show("Couldn't focus \"\(info.title)\" — it may have closed")
                     }
@@ -665,7 +665,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     pid: info.ownerPID, windowID: info.id,
                     windowTitle: info.title, state: .normal
                 ) {
-                    onSuccess?()
+                    DispatchQueue.main.async { onSuccess?() }
                 } else {
                     ToastHUD.show("Couldn't focus \"\(info.title)\" — it may have closed")
                 }
@@ -688,7 +688,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 pid: info.ownerPID, windowID: info.id,
                 windowTitle: info.title, state: info.state
             ) {
-                onSuccess?()
+                DispatchQueue.main.async { onSuccess?() }
             } else {
                 ToastHUD.show("Couldn't focus \"\(info.title)\" — it may have closed")
             }

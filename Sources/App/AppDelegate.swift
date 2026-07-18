@@ -28,6 +28,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var carouselMenuItem: NSMenuItem!
     private var updateManager: UpdateManager!
     private var previewGeneration: UInt64 = 0
+    // Bumped on every performFocus entry; every async continuation in that
+    // flow captures the value and bails once it's stale, so a newer A→B
+    // activation invalidates ALL of the older focus's pending work. Main-only,
+    // like previewGeneration — no lock needed.
+    private var focusGeneration: UInt64 = 0
 
     // Sidebar mode (optional, off by default)
     private var sidebar: SidebarPanel?
@@ -637,6 +642,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ///   sidebar) can omit it; the panel's activation path uses it to trigger
     ///   the CLI install offer after the first successful focus.
     private func performFocus(_ windowInfo: WindowInfo, onSuccess: (() -> Void)? = nil) {
+        // Cancellation token: a newer performFocus supersedes this one. Every
+        // async continuation below re-checks `gen` and bails if stale, so a
+        // rapid A→B never lets A's delayed focus/raise/re-enter/onSuccess fire
+        // against B's context. The synchronous prefix here needs no guard.
+        focusGeneration &+= 1
+        let gen = focusGeneration
+
         // Re-detect fullscreen state via CGS (tracker's isFullScreen can be stale)
         var state = windowInfo.state
         if state != .fullScreen && focuser.isWindowOnFullScreenSpace(windowID: windowInfo.id) {
@@ -661,6 +673,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
                 for i in 0..<nav.count {
                     DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.7) {
+                        // Superseded → this press (and every later pre-scheduled
+                        // one, each independently guarded) noops.
+                        guard !self.focusSuperseded(gen) else { return }
                         self.focuser.simulateCtrlArrow(left: nav.left, dockPID: dockPID)
                     }
                 }
@@ -668,20 +683,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // Check if it worked after animation time
                 let checkDelay = Double(nav.count) * 0.7 + 0.3
                 DispatchQueue.main.asyncAfter(deadline: .now() + checkDelay) {
+                    guard !self.focusSuperseded(gen) else { return }
                     if self.focuser.calculateSpaceNavigation(targetWindowID: info.id) != nil {
                         print("[WP] Ctrl+Arrow didn't work, falling back to exitCurrentFullScreen")
                         let exited = self.focuser.exitCurrentFullScreen(preferDisplayOfWindowID: info.id)
                         // Poll until the exited window leaves its type-4 full-screen
                         // Space rather than guessing 0.55s. Timeout proceeds anyway.
                         self.poll(timeout: 1.5, until: {
-                            exited.map { !self.focuser.isWindowOnFullScreenSpace(windowID: $0.windowID) } ?? true
+                            // Superseded → early-true ends the poll now (the
+                            // then-guard below suppresses any action); avoids
+                            // polling CGS against an abandoned window.
+                            if gen != self.focusGeneration { return true }
+                            return exited.map { !self.focuser.isWindowOnFullScreenSpace(windowID: $0.windowID) } ?? true
                         }) { exitedSpace in
+                            guard !self.focusSuperseded(gen) else { return }
                             print("[WP] fullscreen→normal (fallback): full-screen Space \(exitedSpace ? "exited" : "poll timed out (1.5s), proceeding")")
                             if self.focuser.focus(
                                 pid: info.ownerPID, windowID: info.id,
                                 windowTitle: info.title, state: info.state
                             ) {
-                                DispatchQueue.main.async { onSuccess?() }
+                                DispatchQueue.main.async {
+                                    guard !self.focusSuperseded(gen) else { return }
+                                    onSuccess?()
+                                }
                             } else {
                                 ToastHUD.show("Couldn't focus \"\(info.title)\" — it may have closed")
                             }
@@ -692,7 +716,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             pid: info.ownerPID, windowID: info.id,
                             windowTitle: info.title, state: info.state
                         ) {
-                            DispatchQueue.main.async { onSuccess?() }
+                            DispatchQueue.main.async {
+                                guard !self.focusSuperseded(gen) else { return }
+                                onSuccess?()
+                            }
                         } else {
                             ToastHUD.show("Couldn't focus \"\(info.title)\" — it may have closed")
                         }
@@ -709,14 +736,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // Poll until the exited window leaves its type-4 full-screen Space
                 // rather than guessing 0.55s. Timeout proceeds best-effort anyway.
                 poll(timeout: 1.5, until: {
-                    exited.map { !self.focuser.isWindowOnFullScreenSpace(windowID: $0.windowID) } ?? true
+                    if gen != self.focusGeneration { return true }
+                    return exited.map { !self.focuser.isWindowOnFullScreenSpace(windowID: $0.windowID) } ?? true
                 }) { exitedSpace in
+                    guard !self.focusSuperseded(gen) else { return }
                     print("[WP] fullscreen→normal: full-screen Space \(exitedSpace ? "exited" : "poll timed out (1.5s), proceeding")")
                     if self.focuser.focus(
                         pid: info.ownerPID, windowID: info.id,
                         windowTitle: info.title, state: info.state
                     ) {
-                        DispatchQueue.main.async { onSuccess?() }
+                        DispatchQueue.main.async {
+                            guard !self.focusSuperseded(gen) else { return }
+                            onSuccess?()
+                        }
                     } else {
                         ToastHUD.show("Couldn't focus \"\(info.title)\" — it may have closed")
                     }
@@ -737,11 +769,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     pid: info.ownerPID, windowID: info.id,
                     windowTitle: info.title, state: info.state
                 ) {
-                    DispatchQueue.main.async { onSuccess?() }
+                    DispatchQueue.main.async {
+                        guard !self.focusSuperseded(gen) else { return }
+                        onSuccess?()
+                    }
                 } else {
                     ToastHUD.show("Couldn't focus \"\(info.title)\" — it may have closed")
                 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    guard !self.focusSuperseded(gen) else { return }
                     self.focuser.raiseWindow(
                         pid: info.ownerPID, windowID: info.id,
                         windowTitle: info.title
@@ -759,6 +795,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                guard !self.focusSuperseded(gen) else { return }
                 _ = self.focuser.exitCurrentFullScreen(preferDisplayOfWindowID: info.id)
             }
 
@@ -766,14 +803,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // of guessing 0.28s; the exit above animates while we wait. Timeout
             // proceeds best-effort exactly as the old fixed wait would have.
             poll(timeout: 1.0, until: {
-                self.focuser.calculateSpaceNavigation(targetWindowID: info.id) == nil
+                if gen != self.focusGeneration { return true }
+                return self.focuser.calculateSpaceNavigation(targetWindowID: info.id) == nil
             }) { landed in
+                guard !self.focusSuperseded(gen) else { return }
                 print("[WP] normal→fullscreen: space \(landed ? "switch landed" : "poll timed out (1.0s), proceeding")")
                 if self.focuser.focus(
                     pid: info.ownerPID, windowID: info.id,
                     windowTitle: info.title, state: .normal
                 ) {
-                    DispatchQueue.main.async { onSuccess?() }
+                    DispatchQueue.main.async {
+                        guard !self.focusSuperseded(gen) else { return }
+                        onSuccess?()
+                    }
                 } else {
                     ToastHUD.show("Couldn't focus \"\(info.title)\" — it may have closed")
                 }
@@ -783,6 +825,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 )
                 // Re-enter full-screen as a follow-on once the focus has settled.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    guard !self.focusSuperseded(gen) else { return }
                     self.focuser.reEnterFullScreen(
                         pid: info.ownerPID, windowID: info.id,
                         windowTitle: info.title
@@ -796,17 +839,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 pid: info.ownerPID, windowID: info.id,
                 windowTitle: info.title, state: info.state
             ) {
-                DispatchQueue.main.async { onSuccess?() }
+                DispatchQueue.main.async {
+                    guard !self.focusSuperseded(gen) else { return }
+                    onSuccess?()
+                }
             } else {
                 ToastHUD.show("Couldn't focus \"\(info.title)\" — it may have closed")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                guard !self.focusSuperseded(gen) else { return }
                 self.focuser.raiseWindow(
                     pid: info.ownerPID, windowID: info.id,
                     windowTitle: info.title
                 )
             }
         }
+    }
+
+    /// True (and logs once) when `gen` is no longer the current focus
+    /// generation — a newer performFocus has superseded this pending work.
+    /// Every dispatched continuation in performFocus gates on this via
+    /// `guard !focusSuperseded(gen) else { return }`, mirroring the
+    /// previewGeneration stale-drop but with an observable [WP] trail (there is
+    /// no headless seam for the A→B race, so the log is the evidence).
+    private func focusSuperseded(_ gen: UInt64) -> Bool {
+        guard gen != focusGeneration else { return false }
+        print("[WP] focus gen=\(gen) superseded by gen=\(focusGeneration)")
+        return true
     }
 
     /// Poll `condition` on the main queue every `interval` seconds until it holds

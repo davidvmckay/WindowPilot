@@ -1,5 +1,6 @@
 import XCTest
 import AppKit
+import CoreGraphics
 @testable import WindowPilotCore
 
 /// Integration tests for WindowEnumerator against a real macOS desktop.
@@ -93,6 +94,9 @@ final class EnumerationIntegrationTests: XCTestCase {
     func test_enumeration_finds_real_windows() async throws {
         guard ProcessInfo.processInfo.environment["CI"] == nil else {
             throw XCTSkip("Skipping: requires real macOS desktop")
+        }
+        guard CGPreflightScreenCaptureAccess() else {
+            throw XCTSkip("Skipping: requires Screen Recording permission (kCGWindowName is nil without it)")
         }
 
         didOpenTextEdit = true

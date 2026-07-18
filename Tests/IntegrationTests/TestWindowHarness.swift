@@ -27,7 +27,7 @@ enum TestWindowHarness {
             if let textEditURL {
                 // Equivalent of `open -a TextEdit <file>`: the window title becomes
                 // the filename, which carries the marker.
-                try? await NSWorkspace.shared.open(
+                _ = try? await NSWorkspace.shared.open(
                     [fileURL],
                     withApplicationAt: textEditURL,
                     configuration: NSWorkspace.OpenConfiguration()

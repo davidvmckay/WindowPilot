@@ -97,7 +97,13 @@ public final class PilotPanel: NSPanel {
     /// other existing key handling (which flows through `keyDown`/the field
     /// editor, not `performKeyEquivalent`) is untouched.
     public override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+        // Same idiom as PreferencesWindow's hotkey recorder: strip Caps Lock
+        // (plus numeric-pad/function, which can ride along with device flags
+        // but aren't "real" modifiers) before comparing, so toggling Caps
+        // Lock doesn't silently defeat the `== .command` match.
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            .subtracting([.capsLock, .numericPad, .function])
+        guard mods == .command,
               event.charactersIgnoringModifiers?.lowercased() == "k"
         else {
             return super.performKeyEquivalent(with: event)
@@ -168,6 +174,17 @@ public final class PilotPanel: NSPanel {
     /// Update recent view thumbnails (called after background refresh).
     public func updateRecentThumbnails(_ thumbnails: [UInt32: CGImage]) {
         recentView.updateThumbnails(thumbnails)
+    }
+
+    /// Reload the Recent grid's data directly, bypassing `show()` (which
+    /// orders the panel front via `makeKeyAndOrderFront` and must never run
+    /// in headless tests). Internal (not private) access exists solely so
+    /// integration tests can simulate a Recent-tab data refresh — e.g. a
+    /// dismiss/reopen landing on Recent with a different row count — without
+    /// touching window ordering. `show()` itself still reloads via this same
+    /// underlying `recentView.reloadData` call, ahead of `switchToTab`.
+    internal func reloadRecent(windows: [TrackedWindow], thumbnails: [UInt32: CGImage] = [:]) {
+        recentView.reloadData(windows: windows, thumbnails: thumbnails)
     }
 
     /// Hide the panel without destroying it.
@@ -344,13 +361,21 @@ public final class PilotPanel: NSPanel {
         resyncSelectionToVisibleTab()
 
         // Recent mode can leave a large blank area below just a few cards;
-        // shrink the panel to fit the actual rows. Gated on the transition
-        // (not just `recent`) so a redundant recent→recent call never
-        // captures an already-shrunk height as the "restore" size, and a
-        // redundant all→all call never no-ops a restore.
-        if recent, !wasRecent {
+        // fit the panel to the actual rows EVERY time Recent lands on
+        // screen — including a repeat landing (e.g. dismiss() while still
+        // on Recent, then reopen straight into Recent with a different,
+        // possibly-reloaded row count: `showingRecent` survives `dismiss()`,
+        // so that reopen is a recent→recent call, not a transition). Capture
+        // of `restoreHeight` (the pre-Recent, All Windows height to restore
+        // later) stays gated on the genuine `!wasRecent` transition though —
+        // capturing it on a repeat landing would overwrite it with an
+        // already-shrunk height, corrupting the eventual restore.
+        if recent {
+            if !wasRecent {
+                restoreHeight = frame.height
+            }
             fitHeightToRecentContent()
-        } else if !recent, wasRecent {
+        } else if wasRecent {
             restorePreviousHeight()
         }
     }
@@ -367,13 +392,20 @@ public final class PilotPanel: NSPanel {
         return contentView.frame.height - recentView.frame.height
     }
 
-    /// Shrink the panel to fit the Recent grid's actual row count. Only ever
-    /// shrinks (`min` against the current height) and never below `minSize`.
-    /// Stores the pre-shrink height so `restorePreviousHeight` can undo it.
+    /// Fit the panel to the Recent grid's actual row count. Never exceeds
+    /// `restoreHeight` (the height captured just before the original
+    /// All→Recent transition — see `switchToTab`) and never shrinks below
+    /// `minSize`. Deliberately does NOT capture `restoreHeight` itself
+    /// (`switchToTab` owns that, gated on the genuine transition) — this
+    /// function only computes and applies the fit, so it's safe to call on
+    /// every landing on Recent, including repeat landings where the row
+    /// count changed (e.g. a reload while dismissed) and the fit needs to
+    /// grow back up, not just shrink further. Falls back to the current
+    /// frame height as the ceiling if `restoreHeight` is somehow unset.
     private func fitHeightToRecentContent() {
-        restoreHeight = frame.height
+        let ceiling = restoreHeight ?? frame.height
         let fitted = recentView.preferredHeight(forWidth: frame.width) + chromeHeight()
-        let target = max(minSize.height, min(fitted, frame.height))
+        let target = max(minSize.height, min(fitted, ceiling))
         setHeightAnimated(target)
     }
 

@@ -1,15 +1,21 @@
 import XCTest
 import AppKit
 import WindowPilotCore
-import WindowPilotUI
+@testable import WindowPilotUI
 
-/// Unit tests for TreeView's selection single-source-of-truth behavior.
+/// Unit tests for TreeView's selection single-source-of-truth behavior, plus
+/// PilotPanel's resync of that selection into `selectedWindow` (the state the
+/// ActionBar/preview actually act on).
 ///
-/// These are pure AppKit object tests: they instantiate `TreeView` directly with
-/// fabricated `[AppNode]` data and drive its public `reloadData` / `selectedWindowInfo`
-/// API. They require NO Accessibility permission, NO Screen Recording permission,
-/// and NO on-screen window — NSOutlineView's data-source and selection logic run
-/// headless. They must ALWAYS execute (never environment-gated).
+/// These are pure AppKit object tests: they instantiate `TreeView`/`PilotPanel`
+/// directly with fabricated `[AppNode]` data and drive their public
+/// `reloadData`/`reloadTree` and `selectedWindowInfo`/`selectedWindow` API.
+/// `@testable import` is used only to read PilotPanel's `internal
+/// private(set) var selectedWindow` for assertions — no test writes it.
+/// They require NO Accessibility permission, NO Screen Recording permission,
+/// and NO on-screen window (PilotPanel is never ordered front or made key) —
+/// NSOutlineView's data-source/selection logic and NSPanel construction both
+/// run headless. They must ALWAYS execute (never environment-gated).
 final class TreeSelectionTests: XCTestCase {
 
     // MARK: - Fixtures
@@ -97,5 +103,56 @@ final class TreeSelectionTests: XCTestCase {
 
         XCTAssertEqual(tree.selectedWindowInfo?.id, w1.id, "selection unchanged on identical reload")
         XCTAssertTrue(fired.isEmpty, "identical reload must not refire onWindowSelected")
+    }
+
+    // MARK: - PilotPanel resync (regression: stale selection after empty reload)
+
+    /// Regression test for the review finding: when a search filter reduces the
+    /// tree to zero matches, `TreeView.reloadData(apps: [])` selects nothing and
+    /// does NOT fire `onWindowSelected` (see the callback guard in
+    /// `TreeView.reloadData` above — it only fires when the reload lands on a
+    /// real window). Before the fix, `PilotPanel.reloadTree` never resynced
+    /// after that no-op reload, so `PilotPanel.selectedWindow` kept pointing at
+    /// the previously selected (now invisible) window — the ActionBar's
+    /// Focus/Close/Minimize buttons would then act on a window the user could
+    /// no longer see.
+    func test_pilotPanel_reloadTreeToEmpty_clearsStaleSelection() {
+        let panel = PilotPanel()
+
+        let w1 = window(1, "Alpha")
+        let w2 = window(2, "Bravo")
+
+        // Initial load auto-selects the first leaf (w1); TreeView's first-load
+        // selection callback wires through to PilotPanel.selectedWindow.
+        panel.reloadTree(apps: [app(10, "AppA", [w1, w2])])
+        XCTAssertEqual(panel.selectedWindow?.id, w1.id, "initial load should select the first leaf")
+
+        // Search filter matches nothing: tree reloads to empty.
+        panel.reloadTree(apps: [])
+
+        XCTAssertNil(
+            panel.selectedWindow,
+            "no window should remain selected once the tree is empty — the ActionBar must not act on an invisible window"
+        )
+    }
+
+    /// A reload that still has matches must keep tracking the surviving window
+    /// (guards against an over-eager fix that always nils out selection on any
+    /// reload, rather than only when the visible tab's selection actually went
+    /// nil).
+    func test_pilotPanel_reloadTreeToNonEmpty_tracksSurvivingSelection() {
+        let panel = PilotPanel()
+
+        let w1 = window(1, "Alpha")
+        let w2 = window(2, "Bravo")
+
+        panel.reloadTree(apps: [app(10, "AppA", [w1, w2])])
+        XCTAssertEqual(panel.selectedWindow?.id, w1.id)
+
+        // Filter narrows to just w2 (w1 dropped) — selection should follow to
+        // the new first leaf, not go stale or nil.
+        panel.reloadTree(apps: [app(10, "AppA", [w2])])
+
+        XCTAssertEqual(panel.selectedWindow?.id, w2.id, "selection should follow to the surviving window")
     }
 }

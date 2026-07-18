@@ -26,7 +26,11 @@ public final class PilotPanel: NSPanel {
     // MARK: State
 
     private var appNodes: [AppNode] = []
-    private var selectedWindow: WindowInfo?
+    /// Single source of truth for which window the ActionBar/preview act on.
+    /// Internal (not private) read access exists solely so integration tests
+    /// (`@testable import WindowPilotUI`) can assert there is no stale
+    /// selection after a reload — external writes stay `private`.
+    internal private(set) var selectedWindow: WindowInfo?
     private var clickOutsideMonitor: Any?
     private var showingRecent = false
 
@@ -98,6 +102,17 @@ public final class PilotPanel: NSPanel {
     /// Reload the tree with a new set of app nodes (e.g. after filtering).
     public func reloadTree(apps: [AppNode]) {
         treeView.reloadData(apps: apps)
+
+        // TreeView.reloadData only fires onWindowSelected when the reload lands
+        // on a real window (see TreeView.reloadData). When a filter matches
+        // nothing, selectedWindowInfo goes nil and no callback fires, so
+        // `selectedWindow` would otherwise keep pointing at a window the user
+        // can no longer see — the ActionBar's Focus/Close/Minimize would then
+        // act on an invisible window. Resync here, but only when All Windows is
+        // the tab actually on screen: a background tree reload (e.g. while the
+        // Recent tab is showing) must not clobber a Recent-tab selection.
+        guard !showingRecent else { return }
+        resyncSelectionToVisibleTab()
     }
 
     /// Show the panel. If recent data is available, show Recent tab; otherwise All Windows.
@@ -280,8 +295,17 @@ public final class PilotPanel: NSPanel {
         // Resync the selection single source of truth to the now-visible view.
         // Without this, ActionBar/preview keep acting on the other tab's window
         // (the confirmed selection-desync bug).
+        resyncSelectionToVisibleTab()
+    }
+
+    /// Resync `selectedWindow` (and the preview/action bar it drives) to whichever
+    /// view is currently visible (`recentView` or `treeView`). Only fires
+    /// `onWindowSelected` when the effective selection actually changed, so
+    /// callers that just resync after a no-op reload don't cause a spurious
+    /// preview reload.
+    private func resyncSelectionToVisibleTab() {
         let previous = selectedWindow
-        let current = recent ? recentView.selectedWindowInfo : treeView.selectedWindowInfo
+        let current = showingRecent ? recentView.selectedWindowInfo : treeView.selectedWindowInfo
         selectedWindow = current
         if let win = current {
             if win != previous {

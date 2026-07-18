@@ -170,6 +170,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let apps = enumerator.enumerate(excludingPID: ownPID)
         cachedApps = apps
         let liveIDs = Set(apps.flatMap { $0.windows.map { $0.id } })
+        // Drop thumbnails for windows that have since closed (cheap set diff).
+        screenshotCache.prune(keeping: liveIDs)
         let recent = tracker.combinedRanking(limit: 20).filter { liveIDs.contains($0.id) }
 
         // Gather cached thumbnails for recent windows
@@ -520,6 +522,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if !self.focuser.close(pid: windowInfo.ownerPID, windowID: windowInfo.id, windowTitle: windowInfo.title) {
                 ToastHUD.show("Couldn't close \"\(windowInfo.title)\"")
             }
+            self.screenshotCache.remove(windowID: windowInfo.id)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 self.showPanel()
             }
@@ -776,6 +779,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if !self.focuser.close(pid: windowInfo.ownerPID, windowID: windowInfo.id, windowTitle: windowInfo.title) {
                 ToastHUD.show("Couldn't close \"\(windowInfo.title)\"")
             }
+            self.screenshotCache.remove(windowID: windowInfo.id)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.syncSidebar() }
         }
         panel.onWindowMinimized = { [weak self] windowInfo in
@@ -858,6 +862,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for app in apps {
             for w in app.windows { infoByID[w.id] = (w, app.name) }
         }
+        // Drop thumbnails for windows that have since closed (cheap set diff).
+        screenshotCache.prune(keeping: Set(infoByID.keys))
         let live = Set(infoByID.keys).subtracting(pinnedIDs)
         let priority = tracker.combinedRanking(limit: 30).map(\.id).filter { !pinnedIDs.contains($0) }
         slotAllocator.sync(live: live, priority: priority)

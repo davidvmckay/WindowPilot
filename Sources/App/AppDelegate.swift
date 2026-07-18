@@ -28,10 +28,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var carouselMenuItem: NSMenuItem!
     private var updateManager: UpdateManager!
     private var previewGeneration: UInt64 = 0
-    // Bumped on every performFocus entry; every async continuation in that
-    // flow captures the value and bails once it's stale, so a newer A→B
-    // activation invalidates ALL of the older focus's pending work. Main-only,
-    // like previewGeneration — no lock needed.
+    // Bumped at each selection INTENT via beginFocusRequest() — synchronously,
+    // before any 0.15s pre-delay — not on performFocus entry. This ordering is
+    // load-bearing: a later intent (B) must hold the higher generation than an
+    // earlier one (A) even when A's performFocus is dispatched after B off a
+    // delay. Every async continuation in the focus flow captures the value and
+    // bails once it's stale, so a newer A→B intent invalidates ALL of the older
+    // focus's pending work. Main-only, like previewGeneration — no lock needed.
     private var focusGeneration: UInt64 = 0
 
     // Sidebar mode (optional, off by default)
@@ -282,8 +285,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func wireCarousel() {
         carousel.onWindowActivated = { [weak self] windowInfo in
             guard let self else { return }
+            // Allocate the generation NOW, at intent — not inside the delayed
+            // performFocus — so a later sidebar/panel intent can supersede this
+            // one. If it does, the guard below drops this stale intent before it
+            // enters performFocus.
+            let gen = self.beginFocusRequest()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                self.performFocus(windowInfo)
+                guard !self.focusSuperseded(gen) else { return }
+                self.performFocus(windowInfo, generation: gen)
             }
         }
     }
@@ -641,8 +650,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             self.panel.dismiss()
 
+            // Allocate the generation NOW, at intent — before the 0.15s delay —
+            // so a later sidebar/carousel intent supersedes this one. The guard
+            // drops a stale intent before it enters performFocus.
+            let gen = self.beginFocusRequest()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                self.performFocus(windowInfo) { [weak self] in
+                guard !self.focusSuperseded(gen) else { return }
+                self.performFocus(windowInfo, generation: gen) { [weak self] in
                     // CLI install offer moves here from launch: fires after the
                     // first successful window activation via the panel. Idempotent —
                     // offerCLIInstallation no-ops once already installed or offered.
@@ -686,18 +700,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Focus Logic
 
+    /// - Parameter generation: The cancellation token allocated at the user's
+    ///   selection intent via `beginFocusRequest()`, NOT here — so a newer
+    ///   intent that was allocated later always holds the higher generation,
+    ///   even when an older intent's `performFocus` is invoked after it off a
+    ///   0.15s delay. Every async continuation below re-checks it and bails if
+    ///   stale, so a rapid A→B never lets A's delayed focus/raise/re-enter/
+    ///   onSuccess fire against B's context. The synchronous prefix here needs
+    ///   no guard.
     /// - Parameter onSuccess: Invoked once, synchronously within whichever
     ///   branch's terminal `focuser.focus` call actually lands (never on
     ///   failure). Callers that don't care about the outcome (carousel,
     ///   sidebar) can omit it; the panel's activation path uses it to trigger
     ///   the CLI install offer after the first successful focus.
-    private func performFocus(_ windowInfo: WindowInfo, onSuccess: (() -> Void)? = nil) {
-        // Cancellation token: a newer performFocus supersedes this one. Every
-        // async continuation below re-checks `gen` and bails if stale, so a
-        // rapid A→B never lets A's delayed focus/raise/re-enter/onSuccess fire
-        // against B's context. The synchronous prefix here needs no guard.
-        focusGeneration &+= 1
-        let gen = focusGeneration
+    private func performFocus(_ windowInfo: WindowInfo, generation: UInt64, onSuccess: (() -> Void)? = nil) {
+        let gen = generation
 
         // Re-detect fullscreen state via CGS (tracker's isFullScreen can be stale)
         var state = windowInfo.state
@@ -906,6 +923,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Allocate a fresh focus generation for one user selection intent, called
+    /// SYNCHRONOUSLY at the moment of intent (before any 0.15s pre-delay). The
+    /// returned token is the cancellation identity for that intent: immediate
+    /// callers hand it straight to performFocus; delayed callers capture it and
+    /// re-check `gen == focusGeneration` (via focusSuperseded) before entering
+    /// performFocus, so a superseded delayed intent no-ops without running. One
+    /// call per intent — never bump twice, or the intent supersedes itself.
+    private func beginFocusRequest() -> UInt64 {
+        focusGeneration &+= 1
+        return focusGeneration
+    }
+
     /// True (and logs once) when `gen` is no longer the current focus
     /// generation — a newer performFocus has superseded this pending work.
     /// Every dispatched continuation in performFocus gates on this via
@@ -958,7 +987,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sidebar = panel
 
         panel.onWindowSelected = { [weak self] windowInfo in
-            self?.performFocus(windowInfo)
+            guard let self else { return }
+            // Immediate intent: allocate inline and focus straight away — no
+            // delay means the generation is both taken and consumed here, so a
+            // still-pending delayed panel/carousel intent (lower gen) can't win.
+            self.performFocus(windowInfo, generation: self.beginFocusRequest())
         }
         panel.onDeadPinActivated = { [weak self] pinIndex in
             guard let self, let pin = self.pinStore.pins[safe: pinIndex] ?? nil,

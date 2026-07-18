@@ -31,6 +31,7 @@ if [ "${SKIP_NOTARIZE:-0}" = "1" ] && [ "${DRY_RUN:-0}" != "1" ]; then
 fi
 
 # --- 1. Build (also materializes Package.resolved on a fresh clone)
+sed -i '' "s/let cliVersion = \".*\"/let cliVersion = \"${VERSION}\"/" Sources/CLI/Version.swift
 swift build -c release
 
 # --- 1b. Sparkle command-line tools (cached, version-matched to Package.resolved)

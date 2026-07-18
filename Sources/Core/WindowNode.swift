@@ -60,4 +60,12 @@ public struct AppNode: Identifiable, Hashable {
             && lhs.bundleIdentifier == rhs.bundleIdentifier
             && lhs.windows == rhs.windows
     }
+
+    /// Returns a copy with `bundleIdentifier` replaced. Core has no AppKit,
+    /// so it cannot look up bundle IDs itself (that needs NSRunningApplication);
+    /// this pure copy helper lets the App layer enrich enumeration results
+    /// at the boundary instead.
+    public func withBundleIdentifier(_ bundleIdentifier: String?) -> AppNode {
+        AppNode(id: id, name: name, bundleIdentifier: bundleIdentifier, windows: windows)
+    }
 }

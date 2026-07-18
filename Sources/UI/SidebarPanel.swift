@@ -283,9 +283,13 @@ public final class SidebarPanel: NSPanel {
         if slot.kind == .dynamic, let window = slot.window {
             card.onDragEnded = { [weak self] screenPoint in
                 guard let self else { return }
-                // Dropped inside the pinned zone's vertical range?
+                // Dropped inside the pinned zone's vertical range AND
+                // horizontally over the strip itself (a small ±8pt margin
+                // tolerates imprecise releases right at the strip edge) —
+                // releasing high up anywhere on screen must not pin.
                 let pinnedBottom = self.pinnedZoneBottomOnScreen()
-                if screenPoint.y > pinnedBottom {
+                let horizontalBounds = self.frame.minX - 8 ... self.frame.maxX + 8
+                if screenPoint.y > pinnedBottom && horizontalBounds.contains(screenPoint.x) {
                     self.onPinRequested?(window)
                 }
             }

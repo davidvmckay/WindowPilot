@@ -51,7 +51,7 @@ case "capture":
 case "help", "--help", "-h":
     printHelp()
 case "version", "--version", "-v":
-    print("windowpilot-cli 1.0.0")
+    print("windowpilot-cli \(cliVersion)")
 default:
     // If not a recognized command, treat as a switch query
     let query = args.dropFirst(1).joined(separator: " ")
@@ -202,7 +202,7 @@ func printHelp() {
 
     COMMANDS:
         list, ls                          List all windows
-        switch, sw <query>                Fuzzy search and switch to first match
+        switch, sw <query>                Search (case-insensitive substring) and switch to first match
         search <query>                    Search windows, output JSON
         focus --id <windowID>             Focus a window by its ID
         capture <windowID> [output.png]   Capture window screenshot to file

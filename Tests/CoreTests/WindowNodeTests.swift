@@ -52,4 +52,32 @@ final class WindowNodeTests: XCTestCase {
 
         XCTAssertEqual(info.title, "Untitled")
     }
+
+    // withBundleIdentifier returns a copy with the identifier replaced and
+    // every other field carried over unchanged (Core is AppKit-free, so
+    // enrichment happens at the App layer via this pure copy helper).
+    func test_withBundleIdentifier_replacesOnlyBundleIdentifier() {
+        let windows: [WindowInfo] = [
+            WindowInfo(id: 7, ownerPID: 555, title: "index.ts", bounds: CGRect(x: 0, y: 0, width: 200, height: 100))
+        ]
+        let original = AppNode(id: 555, name: "Code", bundleIdentifier: nil, windows: windows)
+
+        let enriched = original.withBundleIdentifier("com.microsoft.VSCode")
+
+        XCTAssertEqual(enriched.bundleIdentifier, "com.microsoft.VSCode")
+        XCTAssertEqual(enriched.id, original.id)
+        XCTAssertEqual(enriched.name, original.name)
+        XCTAssertEqual(enriched.windows, original.windows)
+        // Original is untouched (value semantics).
+        XCTAssertNil(original.bundleIdentifier)
+    }
+
+    // Passing nil clears an existing bundleIdentifier (e.g. lookup miss).
+    func test_withBundleIdentifier_toNil_clearsExisting() {
+        let original = AppNode(id: 1, name: "Safari", bundleIdentifier: "com.apple.Safari", windows: [])
+
+        let cleared = original.withBundleIdentifier(nil)
+
+        XCTAssertNil(cleared.bundleIdentifier)
+    }
 }

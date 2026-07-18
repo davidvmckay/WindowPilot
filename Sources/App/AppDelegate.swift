@@ -152,6 +152,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // MARK: - Enumeration
+
+    /// Enumerates windows, then enriches each AppNode with its bundle
+    /// identifier. Core stays AppKit-free (WindowEnumerator can't see
+    /// NSRunningApplication), so the PID → bundleID lookup happens here at
+    /// the App boundary via `AppNode.withBundleIdentifier(_:)`.
+    private func enrichedApps(excludingPID pid: Int32) -> [AppNode] {
+        enumerator.enumerate(excludingPID: pid).map { app in
+            app.withBundleIdentifier(NSRunningApplication(processIdentifier: app.id)?.bundleIdentifier)
+        }
+    }
+
     // MARK: - Panel Toggle
 
     private func togglePanel() {
@@ -167,7 +179,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tracker.recordDuration()
 
         let ownPID = Int32(ProcessInfo.processInfo.processIdentifier)
-        let apps = enumerator.enumerate(excludingPID: ownPID)
+        let apps = enrichedApps(excludingPID: ownPID)
         cachedApps = apps
         let liveIDs = Set(apps.flatMap { $0.windows.map { $0.id } })
         // Drop thumbnails for windows that have since closed (cheap set diff).
@@ -210,7 +222,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tracker.recordDuration()
 
         let ownPID = Int32(ProcessInfo.processInfo.processIdentifier)
-        let allApps = enumerator.enumerate(excludingPID: ownPID)
+        let allApps = enrichedApps(excludingPID: ownPID)
 
         // Build carousel items: MRU first, then remaining windows
         let allLiveIDs = Set(allApps.flatMap { $0.windows.map { $0.id } })
@@ -828,7 +840,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func syncSidebar() {
         guard let sidebar else { return }
         let ownPID = Int32(ProcessInfo.processInfo.processIdentifier)
-        let apps = enumerator.enumerate(excludingPID: ownPID)
+        let apps = enrichedApps(excludingPID: ownPID)
 
         // Pinned zone: resolve stored pins against live windows.
         // Empty pin positions are not rendered — cards only, no placeholders.

@@ -29,6 +29,7 @@ public final class RecentView: NSView {
     private var thumbnails: [UInt32: CGImage] = [:]
     private var cardViews: [RecentCardView] = []
     private var selectedIndex: Int = -1
+    private var emptyStateLabel: NSTextField?
 
     // MARK: Init
 
@@ -164,6 +165,12 @@ public final class RecentView: NSView {
         }
         cardViews.removeAll()
 
+        // Remove any prior empty-state label before deciding whether to
+        // re-add it — otherwise it lingers behind cards once data arrives,
+        // and stacks a duplicate on every repeated empty reload.
+        emptyStateLabel?.removeFromSuperview()
+        emptyStateLabel = nil
+
         if trackedWindows.isEmpty {
             let label = NSTextField(labelWithString: "No recent windows yet")
             label.textColor = .tertiaryLabelColor
@@ -175,6 +182,7 @@ public final class RecentView: NSView {
                 label.centerXAnchor.constraint(equalTo: containerView.centerXAnchor),
                 label.topAnchor.constraint(equalTo: containerView.topAnchor, constant: 40),
             ])
+            emptyStateLabel = label
             containerView.frame.size.height = 100
             return
         }
@@ -262,8 +270,6 @@ final class RecentCardView: NSView {
     private let index: Int
     private var selected = false
     private let thumbnailView: WindowThumbnailView
-    private let infoStack = NSStackView()
-    private let appLine = NSStackView()
     private let appIconView = NSImageView()
     private let appNameLabel = NSTextField(labelWithString: "")
     private let titleLabel = NSTextField(labelWithString: "")

@@ -30,9 +30,6 @@ private func CGSCopyManagedDisplaySpaces(_ cid: UInt32) -> CFArray?
 @_silgen_name("CGSManagedDisplaySetCurrentSpace")
 private func CGSManagedDisplaySetCurrentSpace(_ cid: UInt32, _ display: CFString, _ space: UInt64)
 
-@_silgen_name("CGSMoveWindowsToManagedSpace")
-private func CGSMoveWindowsToManagedSpace(_ cid: UInt32, _ windows: CFArray, _ space: UInt64)
-
 @_silgen_name("CGSGetActiveSpace")
 private func CGSGetActiveSpace(_ cid: UInt32) -> UInt64
 

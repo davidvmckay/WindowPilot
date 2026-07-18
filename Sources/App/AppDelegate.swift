@@ -368,6 +368,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         guard getWindowFunc(axWindow, &windowID) == .success, windowID != 0 else { return }
 
+        // Sidebar fullscreen-suppression must be re-evaluated on EVERY tick —
+        // BEFORE the same-window guard below. The guard exists to skip the
+        // expensive tracker/enumeration work when the focused window ID is
+        // unchanged, but a window can toggle fullscreen *in place* (same ID):
+        // exiting fullscreen has to re-show the strip and entering it has to
+        // hide it. If suppression only re-ran on a focus *change*, a stale
+        // `suppressedForFullscreen == true` would keep the strip invisible
+        // until focus moved to a different window. See the method doc for the
+        // bounded cost (skipped entirely when no sidebar exists).
+        refreshSidebarFullscreenSuppression(windowID: windowID, axWindow: axWindow)
+
         // Skip if same window is still focused (avoid redundant updates from timer)
         guard windowID != lastTrackedWindowID else { return }
         previousFocusedWindowID = lastTrackedWindowID
@@ -398,16 +409,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
-        // 3. Small windows → transient (also captures bounds for the sidebar's
-        //    per-display fullscreen check below)
-        var focusedWindowBounds: CGRect = .zero
+        // 3. Small windows → transient (popups, banners, notifications). The
+        //    window bounds for the sidebar's fullscreen suppression are fetched
+        //    separately, above the same-window guard (see
+        //    refreshSidebarFullscreenSuppression) so suppression stays fresh on
+        //    in-place fullscreen toggles.
         if let windowList = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] {
             for info in windowList {
                 guard let wid = info[kCGWindowNumber as String] as? CGWindowID,
                       wid == windowID,
                       let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
                       let w = bounds["Width"], let h = bounds["Height"] else { continue }
-                focusedWindowBounds = CGRect(x: bounds["X"] ?? 0, y: bounds["Y"] ?? 0, width: w, height: h)
                 if !isTransient, w < 200 || h < 100 { isTransient = true }
                 break
             }
@@ -429,10 +441,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             isTransient: isTransient
         )
 
-        // Sidebar: re-sync slots, refresh the thumbnail of the window that
-        // just lost focus (its content is "final" now), and auto-hide over
-        // fullscreen on the strip's display.
-        if let sidebar {
+        // Sidebar: re-sync slots and refresh the thumbnail of the window that
+        // just lost focus (its content is "final" now). Fullscreen suppression
+        // is handled above the same-window guard so it stays fresh even when
+        // the focused window toggles fullscreen without changing ID.
+        if sidebar != nil {
             syncSidebar()
 
             if hasScreenRecording, previousFocusedWindowID != 0 {
@@ -445,21 +458,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self?.panel.updateRecentThumbnails(refreshed)
                 }
             }
+        }
+    }
 
-            // CG window bounds are top-left-origin; NSScreen frames are
-            // bottom-left-origin — flip Y against the primary screen height
-            // before intersecting.
+    /// Re-evaluate the sidebar's fullscreen auto-hide from the CURRENTLY
+    /// focused window, decoupled from `trackFocusedWindow`'s same-window guard.
+    ///
+    /// The guard skips the tracker/enumeration work when the focused window ID
+    /// is unchanged, but suppression freshness is in tension with that: a window
+    /// toggling fullscreen in place keeps the same ID, so this must run on every
+    /// tick to catch it. Cost is bounded and deliberately paid only when a
+    /// sidebar exists — at most one CGWindowListCopyWindowInfo fetch plus one AX
+    /// read (2s cadence). With no sidebar this returns before any of that work,
+    /// keeping the unchanged-path cost identical to before.
+    private func refreshSidebarFullscreenSuppression(windowID: CGWindowID, axWindow: AXUIElement) {
+        guard let sidebar else { return }
+
+        // Live fullscreen state of the focused window (one AX read).
+        var fsRef: CFTypeRef?
+        let isFullScreen = AXUIElementCopyAttributeValue(
+            axWindow, "AXFullScreen" as CFString, &fsRef
+        ) == .success && (fsRef as? Bool) == true
+
+        // Live bounds of the focused window (one CG fetch); nil if not listed.
+        var focusedWindowBounds: CGRect?
+        if let windowList = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] {
+            for info in windowList {
+                guard let wid = info[kCGWindowNumber as String] as? CGWindowID,
+                      wid == windowID,
+                      let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
+                      let w = bounds["Width"], let h = bounds["Height"] else { continue }
+                focusedWindowBounds = CGRect(x: bounds["X"] ?? 0, y: bounds["Y"] ?? 0, width: w, height: h)
+                break
+            }
+        }
+
+        // Hide the strip only when the focused window is fullscreen AND overlaps
+        // the strip's display. CG bounds are top-left-origin; NSScreen frames
+        // are bottom-left-origin — flip Y against the primary screen height
+        // before intersecting.
+        var hideForFullscreen = false
+        if isFullScreen, let bounds = focusedWindowBounds {
             let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
             let cocoaBounds = CGRect(
-                x: focusedWindowBounds.minX,
-                y: primaryHeight - focusedWindowBounds.maxY,
-                width: focusedWindowBounds.width,
-                height: focusedWindowBounds.height
+                x: bounds.minX, y: primaryHeight - bounds.maxY,
+                width: bounds.width, height: bounds.height
             )
             let stripScreenFrame = (sidebar.currentScreen ?? NSScreen.main)?.frame ?? .zero
-            let hideForFullscreen = isFullScreen && cocoaBounds.intersects(stripScreenFrame)
-            sidebar.setHiddenForFullscreen(hideForFullscreen)
+            hideForFullscreen = cocoaBounds.intersects(stripScreenFrame)
         }
+        sidebar.setHiddenForFullscreen(hideForFullscreen)
+
+        // Defense-in-depth: reassert visibility if nothing wants the strip
+        // hidden but a wake/Space race ordered it out behind our back.
+        sidebar.assertVisibleIfWanted()
     }
 
     // MARK: - Panel Wiring

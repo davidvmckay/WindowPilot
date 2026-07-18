@@ -150,6 +150,18 @@ public final class SidebarPanel: NSPanel {
         orderFrontRegardless()
     }
 
+    /// Self-healing reassertion: if the strip *should* be on screen but a
+    /// wake/Space race ordered it out behind our back, order it front again.
+    /// Deliberately dumb — it reads intent (`userWantsVisible`), respects
+    /// suppression, and only touches ordering; it never mutates state. Called
+    /// from the tracker's always-path as defense-in-depth for residual edges
+    /// the explicit re-show paths might miss.
+    public func assertVisibleIfWanted() {
+        if userWantsVisible, !suppressedForFullscreen, !isVisible {
+            orderFrontRegardless()
+        }
+    }
+
     public func render(pinned: [SidebarSlot], dynamic: [SidebarSlot], focusedWindowID: UInt32?) {
         pinnedSlots = pinned
         dynamicSlots = dynamic

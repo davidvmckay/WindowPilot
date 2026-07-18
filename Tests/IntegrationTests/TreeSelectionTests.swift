@@ -155,4 +155,51 @@ final class TreeSelectionTests: XCTestCase {
 
         XCTAssertEqual(panel.selectedWindow?.id, w2.id, "selection should follow to the surviving window")
     }
+
+    // MARK: - Visible-tab gating (regression: debounced tree reload clobbers Recent-tab selection)
+
+    /// Regression test for the review finding on `wireCallbacks()`:
+    /// `TreeView.reloadData`'s ID-reselect logic can synchronously refire
+    /// `onWindowSelected` even when the tree is NOT the visible tab. Reachable
+    /// race: the user types a filter on the All tab (SearchBar debounces
+    /// 30ms), switches to Recent within that window, and the debounced
+    /// `reloadTree` then lands — `PilotPanel.reloadTree` runs
+    /// `treeView.reloadData` unconditionally, BEFORE its `!showingRecent`
+    /// guard. Before the fix, `treeView.onWindowSelected` was wired
+    /// unconditionally in `wireCallbacks()`, so that synchronous refire
+    /// clobbered `selectedWindow`/ActionBar with a tree window while Recent
+    /// was on screen — stale until the next tab switch. The fix gates the
+    /// handler on `!showingRecent`.
+    func test_reloadTree_whileRecentTabVisible_doesNotClobberSelectionWithTreeWindow() {
+        let panel = PilotPanel()
+
+        let w1 = window(1, "Alpha")
+        let w2 = window(2, "Bravo")
+
+        // All Windows tab: first leaf (w1) auto-selected.
+        panel.reloadTree(apps: [app(10, "AppA", [w1, w2])])
+        XCTAssertEqual(panel.selectedWindow?.id, w1.id, "initial load should select the first leaf")
+
+        // Switch to the Recent tab. `switchToTab` is internal (not private)
+        // specifically so this test can simulate the switch directly without
+        // going through `show()`, which orders the panel front — this suite
+        // must stay headless-safe and never do that. Recent has no data
+        // loaded, so its selection is nil; resyncSelectionToVisibleTab
+        // correctly clears `selectedWindow` to match.
+        panel.switchToTab(recent: true)
+        XCTAssertNil(panel.selectedWindow, "switching to an empty Recent tab should clear selectedWindow")
+
+        // Simulate the debounced search-filter reload landing on the tree
+        // while Recent is still visible. Dropping w1 (the tree's previously
+        // selected window) from the data forces TreeView's ID-reselect to
+        // fall back to the new first leaf (w2) and fire onWindowSelected(w2)
+        // synchronously from inside treeView.reloadData — exactly the
+        // reload side-door the finding describes.
+        panel.reloadTree(apps: [app(10, "AppA", [w2])])
+
+        XCTAssertNil(
+            panel.selectedWindow,
+            "a tree reload landing while Recent is visible must not clobber selectedWindow with a tree window"
+        )
+    }
 }

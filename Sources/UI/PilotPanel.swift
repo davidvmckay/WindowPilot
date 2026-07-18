@@ -278,7 +278,13 @@ public final class PilotPanel: NSPanel {
         switchToTab(recent: tabBar.selectedSegment == 0)
     }
 
-    private func switchToTab(recent: Bool) {
+    /// Switch the visible tab (All Windows ↔ Recent) and resync the selection
+    /// single source of truth to whichever view becomes visible.
+    /// Internal (not private) read/call access exists solely so integration
+    /// tests (`@testable import`) can simulate a tab switch directly — `show()`
+    /// is the only other caller, and it also orders the panel front, which
+    /// headless tests must avoid.
+    internal func switchToTab(recent: Bool) {
         showingRecent = recent
         tabBar.selectedSegment = recent ? 0 : 1
 
@@ -329,29 +335,55 @@ public final class PilotPanel: NSPanel {
             self?.onDismissRequested?()
         }
 
-        // Tree selection → load preview + update action bar
+        // Tree selection → load preview + update action bar.
+        // Gated on `!showingRecent`: TreeView.reloadData can synchronously
+        // refire onWindowSelected via its ID-reselect logic (see
+        // TreeView.reloadData) even when the tree is NOT the visible tab —
+        // e.g. a debounced search-filter reload lands on the tree after the
+        // user has already switched to the Recent tab. User-driven selection
+        // can only ever originate from the tree while it is visible, so this
+        // gate only blocks that reload side-door; it never drops a real click
+        // or arrow-key selection.
         treeView.onWindowSelected = { [weak self] windowInfo in
-            self?.selectedWindow = windowInfo
-            self?.actionBar.updateForState(windowInfo.state)
-            self?.onWindowSelected?(windowInfo)
+            guard let self, !self.showingRecent else { return }
+            self.selectedWindow = windowInfo
+            self.actionBar.updateForState(windowInfo.state)
+            self.onWindowSelected?(windowInfo)
         }
 
-        // Tree activation → focus window
+        // Tree activation → focus window.
+        // Also gated on `!showingRecent`, though for a different reason than
+        // above: activation only ever fires from Enter
+        // (KeyableOutlineView.onEnterKey) or a double-click delivered to the
+        // outline view itself — both require the tree to be visible AND
+        // first responder, which is impossible while Recent is showing
+        // (switchToTab hides splitView and moves first responder to
+        // recentView). No reload path ever calls onWindowActivated, so this
+        // gate is a no-op in practice; it's kept only for symmetry/defense in
+        // depth, and can never drop a legitimate activation.
         treeView.onWindowActivated = { [weak self] windowInfo in
-            self?.selectedWindow = windowInfo
-            self?.onWindowActivated?(windowInfo)
+            guard let self, !self.showingRecent else { return }
+            self.selectedWindow = windowInfo
+            self.onWindowActivated?(windowInfo)
         }
 
-        // Recent view selection → load preview
+        // Recent view selection → load preview.
+        // Symmetric gate: the Recent grid's own reload/selection logic must
+        // not clobber `selectedWindow` while the All Windows tab is visible.
         recentView.onWindowSelected = { [weak self] windowInfo in
-            self?.selectedWindow = windowInfo
-            self?.onWindowSelected?(windowInfo)
+            guard let self, self.showingRecent else { return }
+            self.selectedWindow = windowInfo
+            self.onWindowSelected?(windowInfo)
         }
 
-        // Recent view activation → focus window
+        // Recent view activation → focus window. Same reasoning as
+        // treeView.onWindowActivated above — RecentCardView's click/double-click
+        // handlers and RecentView.keyDown's Enter case only fire when the
+        // Recent grid is visible and holds first responder.
         recentView.onWindowActivated = { [weak self] windowInfo in
-            self?.selectedWindow = windowInfo
-            self?.onWindowActivated?(windowInfo)
+            guard let self, self.showingRecent else { return }
+            self.selectedWindow = windowInfo
+            self.onWindowActivated?(windowInfo)
         }
 
         // Action bar buttons

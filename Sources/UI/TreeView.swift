@@ -19,6 +19,11 @@ public final class TreeView: NSView {
     private var expandedPIDs: Set<Int32> = []
     private var iconCache: [Int32: NSImage] = [:]
 
+    /// True while `reloadData` reprograms the selection. The selection-change
+    /// delegate is suppressed during this window so `onWindowSelected` fires at
+    /// most once, and only when the effective selection actually changed.
+    private var suppressSelectionCallback = false
+
     // MARK: Callbacks
 
     public var onWindowSelected: ((WindowInfo) -> Void)?
@@ -38,11 +43,25 @@ public final class TreeView: NSView {
 
     // MARK: Public API
 
-    /// Replace current data, preserve expand/collapse state, re-select if possible.
+    /// The WindowInfo at the currently selected row, or nil when nothing is
+    /// selected or an app (group) row is selected. Single source of truth for
+    /// which window the tree considers active.
+    public var selectedWindowInfo: WindowInfo? {
+        windowInfo(atRow: outlineView.selectedRow)
+    }
+
+    /// Replace current data, preserve expand/collapse state, and re-select the
+    /// same window by identity (not row position). Fires `onWindowSelected` only
+    /// when the effective selection actually changes, so PilotPanel/preview
+    /// resync without a spurious refire on identical data.
     public func reloadData(apps: [AppNode]) {
         // Save currently expanded PIDs before the reload
         let previouslyExpanded = expandedPIDs
         let isFirstLoad = self.apps.isEmpty
+
+        // Capture the selected window's ID so we can restore selection by
+        // identity after the reload — row indices shift as the tree is filtered.
+        let previousSelectedID = selectedWindowInfo?.id
 
         self.apps = apps
 
@@ -50,6 +69,9 @@ public final class TreeView: NSView {
         let currentPIDs = Set(apps.map(\.id))
         iconCache = iconCache.filter { currentPIDs.contains($0.key) }
 
+        // Reprogram the selection with the delegate callback suppressed; we fire
+        // onWindowSelected explicitly below only if the selection changed.
+        suppressSelectionCallback = true
         outlineView.reloadData()
 
         if isFirstLoad {
@@ -68,9 +90,22 @@ public final class TreeView: NSView {
             }
         }
 
-        // Select first leaf item if nothing is currently selected
-        if outlineView.selectedRow == -1 {
+        // NSOutlineView.reloadData preserves selection by ROW INDEX, which can
+        // silently point at a different window after filtering. Re-select the
+        // previously selected window by ID instead; if it is gone, fall back to
+        // the first leaf.
+        if let id = previousSelectedID, let row = row(forWindowID: id) {
+            outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        } else {
             selectFirstLeaf()
+        }
+        suppressSelectionCallback = false
+
+        // Fire onWindowSelected only when the effective selection changed, so the
+        // preview/action bar resync without refiring on identical data.
+        let newSelectedID = selectedWindowInfo?.id
+        if newSelectedID != previousSelectedID, let win = selectedWindowInfo {
+            onWindowSelected?(win)
         }
     }
 
@@ -145,6 +180,17 @@ public final class TreeView: NSView {
     private func windowInfo(atRow row: Int) -> WindowInfo? {
         guard row >= 0 else { return nil }
         return outlineView.item(atRow: row) as? WindowInfo
+    }
+
+    /// The visible row index of the window with `id`, or nil if that window is
+    /// not currently in — or not visible within — the tree.
+    private func row(forWindowID id: UInt32) -> Int? {
+        for app in apps {
+            guard let win = app.windows.first(where: { $0.id == id }) else { continue }
+            let row = outlineView.row(forItem: win)
+            return row >= 0 ? row : nil
+        }
+        return nil
     }
 
     private func activateSelectedWindow() {
@@ -224,6 +270,7 @@ extension TreeView: NSOutlineViewDelegate {
     }
 
     public func outlineViewSelectionDidChange(_ notification: Notification) {
+        guard !suppressSelectionCallback else { return }
         guard let win = windowInfo(atRow: outlineView.selectedRow) else { return }
         onWindowSelected?(win)
     }

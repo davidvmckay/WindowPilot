@@ -44,6 +44,13 @@ public final class RecentView: NSView {
 
     // MARK: Public API
 
+    /// The WindowInfo for the currently selected card, or nil when no card is
+    /// selected. Single source of truth for the Recent tab's active window.
+    public var selectedWindowInfo: WindowInfo? {
+        guard selectedIndex >= 0, selectedIndex < trackedWindows.count else { return nil }
+        return windowInfo(from: trackedWindows[selectedIndex])
+    }
+
     public func reloadData(windows: [TrackedWindow], thumbnails: [UInt32: CGImage]) {
         self.trackedWindows = windows
         self.thumbnails = thumbnails

@@ -276,6 +276,24 @@ public final class PilotPanel: NSPanel {
         } else {
             searchBar.focusSearchField()
         }
+
+        // Resync the selection single source of truth to the now-visible view.
+        // Without this, ActionBar/preview keep acting on the other tab's window
+        // (the confirmed selection-desync bug).
+        let previous = selectedWindow
+        let current = recent ? recentView.selectedWindowInfo : treeView.selectedWindowInfo
+        selectedWindow = current
+        if let win = current {
+            if win != previous {
+                onWindowSelected?(win)
+                actionBar.updateForState(win.state)
+            }
+        } else {
+            // Nothing selected in the visible tab: clear the preview and reset
+            // the action buttons to a safe (neutral) state.
+            previewView.clearPreview()
+            actionBar.updateForState(.normal)
+        }
     }
 
     private func wireCallbacks() {

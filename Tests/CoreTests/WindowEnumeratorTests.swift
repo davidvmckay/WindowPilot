@@ -1,4 +1,5 @@
 import XCTest
+import CoreGraphics
 @testable import WindowPilotCore
 
 // MARK: - MockWindowEnumerator
@@ -185,5 +186,89 @@ final class WindowEnumeratorTests: XCTestCase {
         XCTAssertFalse(apps.isEmpty)
         XCTAssertLessThan(elapsed, 0.1,
                           "Enumeration of 50 windows took \(elapsed)s — must be < 100ms")
+    }
+}
+
+// MARK: - OffScreenEnumerationTests
+
+/// Exercises the REAL WindowEnumerator merge/build statics (not MockWindowEnumerator)
+/// around untitled off-screen windows. Entries are CG-shaped dictionaries so the
+/// production filters run unmodified. AX presence is modeled by the tag passed to
+/// buildAppNodes ("✕" = no AX representation), so no live Accessibility session is
+/// needed — the AX call itself is covered at the integration tier.
+final class OffScreenEnumerationTests: XCTestCase {
+
+    /// Build a CGWindowList-shaped entry the way CGWindowListCopyWindowInfo would.
+    private func cgEntry(
+        id: UInt32,
+        pid: Int32,
+        ownerName: String,
+        name: String?,
+        bounds: CGRect = CGRect(x: 0, y: 0, width: 800, height: 600),
+        layer: Int = 0,
+        alpha: Double = 1.0
+    ) -> [String: Any] {
+        var entry: [String: Any] = [
+            kCGWindowNumber as String: id,
+            kCGWindowOwnerPID as String: pid,
+            kCGWindowOwnerName as String: ownerName,
+            kCGWindowLayer as String: layer,
+            kCGWindowAlpha as String: alpha,
+            kCGWindowBounds as String: bounds.dictionaryRepresentation,
+        ]
+        if let name = name {
+            entry[kCGWindowName as String] = name
+        }
+        return entry
+    }
+
+    // Q2 merge must admit an untitled off-screen window. Without Screen Recording
+    // permission macOS returns NO kCGWindowName for other apps, so a name guard would
+    // silently drop the entire cross-Space pass. (This is the core bug fix.)
+    func test_appendOffScreen_admitsUntitledWindow() {
+        let entry = cgEntry(id: 700, pid: 7001, ownerName: "Ghostty", name: nil)
+        var seen = Set<UInt32>()
+        var all: [(entry: [String: Any], tag: String)] = []
+
+        WindowEnumerator.appendOffScreenEntries(
+            from: [entry], displays: [], excludingPID: nil,
+            seenIDs: &seen, into: &all)
+
+        XCTAssertEqual(all.count, 1, "Untitled off-screen window must be admitted")
+        XCTAssertEqual(all.first?.tag, "", "No display match → untagged; AX decides later")
+        XCTAssertTrue(seen.contains(700), "Admitted window ID must be recorded as seen")
+    }
+
+    // Some apps set kCGWindowName to "" — empty-named off-screen windows must survive too.
+    func test_appendOffScreen_admitsEmptyNamedWindow() {
+        let entry = cgEntry(id: 701, pid: 7001, ownerName: "Ghostty", name: "")
+        var seen = Set<UInt32>()
+        var all: [(entry: [String: Any], tag: String)] = []
+
+        WindowEnumerator.appendOffScreenEntries(
+            from: [entry], displays: [], excludingPID: nil,
+            seenIDs: &seen, into: &all)
+
+        XCTAssertEqual(all.count, 1, "Empty-named off-screen window must be admitted")
+    }
+
+    // Junk filter now lives in AX: a ghost entry (CG window with no AX representation,
+    // tagged "✕") must be excluded by buildAppNodes. This replaces the old name guard.
+    func test_buildAppNodes_excludesGhostWindows() {
+        let entry = cgEntry(id: 800, pid: 8001, ownerName: "Ghostty", name: nil)
+        let nodes = WindowEnumerator.buildAppNodes(from: [(entry, "✕")])
+        XCTAssertTrue(nodes.isEmpty, "Ghost windows (no AX presence) must be excluded")
+    }
+
+    // An untitled off-screen entry WITH AX presence (untagged) is kept and titled "Untitled".
+    func test_buildAppNodes_keepsUntitledOffScreenWithAX() {
+        let entry = cgEntry(id: 801, pid: 8001, ownerName: "Ghostty", name: nil)
+        let nodes = WindowEnumerator.buildAppNodes(from: [(entry, "")])
+        XCTAssertEqual(nodes.count, 1)
+        XCTAssertEqual(nodes.first?.name, "Ghostty")
+        XCTAssertEqual(nodes.first?.windows.count, 1)
+        XCTAssertEqual(nodes.first?.windows.first?.title, "Untitled",
+                       "Off-screen window with AX presence but no name → 'Untitled'")
+        XCTAssertEqual(nodes.first?.windows.first?.state, .normal)
     }
 }

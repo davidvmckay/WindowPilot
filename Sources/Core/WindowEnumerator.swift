@@ -63,26 +63,13 @@ public final class WindowEnumerator: WindowEnumerating {
 
         // ── Q2: ALL windows — find off-screen windows (other Spaces, minimized, etc.) ──
         let allList = Self.queryWindows(options: [.excludeDesktopElements])
-
-        for entry in allList {
-            let wid = Self.windowID(from: entry)
-            guard !seenIDs.contains(wid) else { continue }
-            guard Self.isEligible(entry, excludingPID: excludingPID) else { continue }
-            guard let name = entry[Self.kWindowName] as? String, !name.isEmpty else { continue }
-            guard let rect = Self.bounds(from: entry) else { continue }
-
-            // Check if this window matches a display's dimensions → full-screen
-            var tag = ""
-            for display in displays {
-                if Self.matchesDisplay(rect, display: display) {
-                    tag = "⊞"
-                    break
-                }
-            }
-
-            seenIDs.insert(wid)
-            allEntries.append((entry, tag))
-        }
+        Self.appendOffScreenEntries(
+            from: allList,
+            displays: displays,
+            excludingPID: excludingPID,
+            seenIDs: &seenIDs,
+            into: &allEntries
+        )
 
         // ── Post-Q2: detect minimized windows via Accessibility ──
         // Off-screen windows with empty tags could be minimized or on another Space.
@@ -91,6 +78,45 @@ public final class WindowEnumerator: WindowEnumerating {
 
         // ── Build AppNodes ──
         return Self.buildAppNodes(from: allEntries)
+    }
+
+    /// Q2 merge: admit off-screen windows (other Spaces, minimized, etc.) not already
+    /// seen in the Q1 on-screen pass. Extracted as an internal seam so the merge/filter
+    /// rules can be unit-tested with CG-shaped dictionaries.
+    ///
+    /// Junk filtering is intentionally NOT done here by window name: without Screen
+    /// Recording permission macOS returns no `kCGWindowName` for other apps, so a
+    /// name guard would silently drop every off-screen window. Ghost surfaces are
+    /// instead filtered later by AX presence (see `detectMinimized` / `buildAppNodes`).
+    static func appendOffScreenEntries(
+        from allList: [[String: Any]],
+        displays: [CGRect],
+        excludingPID: Int32?,
+        seenIDs: inout Set<UInt32>,
+        into allEntries: inout [(entry: [String: Any], tag: String)]
+    ) {
+        for entry in allList {
+            let wid = windowID(from: entry)
+            guard !seenIDs.contains(wid) else { continue }
+            guard isEligible(entry, excludingPID: excludingPID) else { continue }
+            // NOTE: no window-name guard here. macOS omits kCGWindowName for other apps
+            // without Screen Recording permission, so requiring a name would drop the
+            // entire off-screen pass. Untitled entries fall back to "Untitled" in
+            // buildAppNodes; ghost surfaces are filtered by AX presence in detectMinimized.
+            guard let rect = bounds(from: entry) else { continue }
+
+            // Check if this window matches a display's dimensions → full-screen
+            var tag = ""
+            for display in displays {
+                if matchesDisplay(rect, display: display) {
+                    tag = "⊞"
+                    break
+                }
+            }
+
+            seenIDs.insert(wid)
+            allEntries.append((entry, tag))
+        }
     }
 
     // MARK: - Minimized detection via AX
@@ -202,7 +228,7 @@ public final class WindowEnumerator: WindowEnumerating {
         return (0..<Int(displayCount)).map { CGDisplayBounds(displayIDs[$0]) }
     }
 
-    private static func buildAppNodes(from entries: [(entry: [String: Any], tag: String)]) -> [AppNode] {
+    static func buildAppNodes(from entries: [(entry: [String: Any], tag: String)]) -> [AppNode] {
         var byPID: [Int32: (name: String, windows: [WindowInfo])] = [:]
 
         for (entry, tag) in entries where tag != "✕" {

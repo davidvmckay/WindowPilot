@@ -41,7 +41,7 @@ if ! git diff --quiet -- Sources/CLI/Version.swift; then
   VERSION_STAMPED=1
   if [ "${DRY_RUN:-0}" != "1" ]; then
     git add Sources/CLI/Version.swift
-    git commit -m "Stamp CLI version ${VERSION}"
+    git commit -m "Stamp CLI version ${VERSION}" -- Sources/CLI/Version.swift
   fi
 fi
 swift build -c release

@@ -361,26 +361,6 @@ public final class WindowFocuser: WindowFocusing {
         AXUIElementPerformAction(axWindow, kAXRaiseAction as CFString)
     }
 
-    /// Light focus: CGS Space switch + AX raise ONLY.
-    /// No SkyLight, no kAXFrontmostAttribute — those cause the window to appear
-    /// as an overlay on full-screen instead of properly switching Spaces.
-    public func focusLight(pid: Int32, windowID: UInt32, windowTitle: String) {
-        guard hasAccessibilityPermission() else { return }
-        print("[WP] focusLight: pid=\(pid) wid=\(windowID)")
-        if windowID != 0 {
-            switchDisplayToWindowSpace(windowID: windowID)
-        }
-        let appElement = AXUIElementCreateApplication(pid)
-        var windowsRef: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef)
-        let windows = (result == .success) ? (windowsRef as? [AXUIElement] ?? []) : []
-        if let axWindow = findWindowByID(windowID, in: windows)
-            ?? findWindow(matching: windowTitle, in: windows)
-            ?? windows.first {
-            AXUIElementPerformAction(axWindow, kAXRaiseAction as CFString)
-        }
-    }
-
     /// Info about a window that was exited from full-screen.
     public struct ExitedFullScreenInfo {
         public let pid: Int32
@@ -524,93 +504,15 @@ public final class WindowFocuser: WindowFocusing {
         return nil
     }
 
-    /// Exit a specific window's full-screen mode, setting its size to near-fullscreen
-    /// so it doesn't shrink to a small window. Returns true on success.
-    public func exitFullScreen(pid: Int32, windowID: UInt32, windowTitle: String) -> Bool {
-        guard hasAccessibilityPermission() else { return false }
-
-        let appElement = AXUIElementCreateApplication(pid)
-        var windowsRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef) == .success,
-              let axWindows = windowsRef as? [AXUIElement] else {
-            print("[WP] exitFullScreen: failed to get AX windows for pid=\(pid)")
-            return false
-        }
-
-        // Debug: log all AX windows to understand what's available
-        for (i, w) in axWindows.enumerated() {
-            var wid: CGWindowID = 0
-            Self._getWindow(w, &wid)
-            var titleRef: CFTypeRef?
-            AXUIElementCopyAttributeValue(w, kAXTitleAttribute as CFString, &titleRef)
-            var fsRef: CFTypeRef?
-            let fsErr = AXUIElementCopyAttributeValue(w, "AXFullScreen" as CFString, &fsRef)
-            print("[WP] exitFS: [\(i)] wid=\(wid) title=\"\(titleRef as? String ?? "?")\" fs=\(fsRef ?? "nil" as CFTypeRef) err=\(fsErr.rawValue)")
-        }
-
-        // Try multiple strategies to find the target window:
-        // 1. By CGWindowID (fails on other Spaces on macOS 16)
-        // 2. By AXFullScreen = true
-        // 3. By title match
-        // 4. First window (last resort)
-        var axWindow: AXUIElement? = findWindowByID(windowID, in: axWindows)
-
-        if axWindow == nil {
-            for w in axWindows {
-                var fsRef: CFTypeRef?
-                if AXUIElementCopyAttributeValue(w, "AXFullScreen" as CFString, &fsRef) == .success,
-                   (fsRef as? Bool) == true {
-                    axWindow = w
-                    print("[WP] exitFS: matched by AXFullScreen=true")
-                    break
-                }
-            }
-        }
-
-        if axWindow == nil {
-            axWindow = findWindow(matching: windowTitle, in: axWindows)
-            if axWindow != nil {
-                print("[WP] exitFS: matched by title \"\(windowTitle)\"")
-            }
-        }
-
-        if axWindow == nil, let first = axWindows.first {
-            axWindow = first
-            print("[WP] exitFS: using first window (last resort)")
-        }
-
-        guard let axWindow else {
-            print("[WP] exitFullScreen: no windows at all for pid=\(pid)")
-            return false
-        }
-
-        // Get screen size from CGWindowList for near-fullscreen sizing
-        if let windowList = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] {
-            for winInfo in windowList {
-                guard let wid = winInfo[kCGWindowNumber as String] as? CGWindowID,
-                      wid == windowID,
-                      let bounds = winInfo[kCGWindowBounds as String] as? [String: CGFloat],
-                      let w = bounds["Width"], let h = bounds["Height"] else { continue }
-
-                var position = CGPoint(x: 5, y: 30)
-                var size = CGSize(width: w - 10, height: h - 40)
-                if let posValue = AXValueCreate(.cgPoint, &position) {
-                    AXUIElementSetAttributeValue(axWindow, kAXPositionAttribute as CFString, posValue)
-                }
-                if let sizeValue = AXValueCreate(.cgSize, &size) {
-                    AXUIElementSetAttributeValue(axWindow, kAXSizeAttribute as CFString, sizeValue)
-                }
-                print("[WP] exitFullScreen: set size \(size.width)x\(size.height)")
-                break
-            }
-        }
-
-        print("[WP] exitFullScreen: pid=\(pid) wid=\(windowID)")
-        AXUIElementSetAttributeValue(axWindow, "AXFullScreen" as CFString, false as CFTypeRef)
-        return true
-    }
-
     /// Re-enter full-screen for a previously exited window.
+    ///
+    /// No windows.first tail: setting AXFullScreen on an arbitrary window is a
+    /// disruptive mutation, so route the same matched/failed decision as
+    /// focus()/raiseWindow() through the pure `resolution(policy: .focus, …)`
+    /// helper — an ID match wins, a title match is an acceptable fallback. If
+    /// neither resolves, do nothing (the window staying un-fullscreened is the
+    /// correct, constraint-compliant failure) rather than full-screening a
+    /// different window of the same app.
     public func reEnterFullScreen(pid: Int32, windowID: UInt32, windowTitle: String) {
         let appElement = AXUIElementCreateApplication(pid)
         var windowsRef: CFTypeRef?
@@ -620,13 +522,15 @@ public final class WindowFocuser: WindowFocusing {
             return
         }
 
-        // findWindowByID can fail after fullscreen exit (ID may change)
-        let window = findWindowByID(windowID, in: windows)
-            ?? findWindow(matching: windowTitle, in: windows)
-            ?? windows.first
+        let byID = findWindowByID(windowID, in: windows)
+        let byTitle = (byID == nil) ? findWindow(matching: windowTitle, in: windows) : nil
+        let window: AXUIElement? = Self.resolution(
+            policy: .focus, windowID: windowID,
+            idMatchFound: byID != nil, titleMatchCount: byTitle != nil ? 1 : 0
+        ) == .matched ? (byID ?? byTitle) : nil
 
         guard let window else {
-            print("[WP] reEnterFullScreen: no window found")
+            print("[WP] reEnterFullScreen: no window match for wid=\(windowID) '\(windowTitle)'")
             return
         }
         print("[WP] re-entering full-screen: pid=\(pid) wid=\(windowID)")

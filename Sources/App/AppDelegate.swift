@@ -657,7 +657,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
         } else if info.state == .fullScreen {
-            // normal→fullscreen: CGS switch → exit → focus → re-enter
+            // normal→fullscreen. The exit/re-enter dance exists ONLY to cross a
+            // Space boundary — you can't focus a full-screen window on another
+            // Space without first pulling it out of full-screen. When no Space
+            // switch is needed (the target's full-screen Space is ALREADY
+            // current), the dance would toggle AXFullScreen mid-animation for
+            // nothing. Skip it entirely: focus + raise the current Space's
+            // window directly.
+            if focuser.calculateSpaceNavigation(targetWindowID: info.id) == nil {
+                print("[WP] normal→fullscreen: already on target Space, focusing directly (no dance)")
+                if focuser.focus(
+                    pid: info.ownerPID, windowID: info.id,
+                    windowTitle: info.title, state: info.state
+                ) {
+                    DispatchQueue.main.async { onSuccess?() }
+                } else {
+                    ToastHUD.show("Couldn't focus \"\(info.title)\" — it may have closed")
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    self.focuser.raiseWindow(
+                        pid: info.ownerPID, windowID: info.id,
+                        windowTitle: info.title
+                    )
+                }
+                return
+            }
+
+            // Needs a Space switch: CGS switch → exit → focus → re-enter.
             print("[WP] normal→fullscreen: CGS switch then exit fullscreen")
 
             _ = focuser.focus(

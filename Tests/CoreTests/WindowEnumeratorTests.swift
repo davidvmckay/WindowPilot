@@ -4,9 +4,11 @@ import CoreGraphics
 
 // MARK: - MockWindowEnumerator
 
-/// Performs the same filtering and grouping logic that the real WindowEnumerator
-/// would apply to raw CGWindowList data, so these tests exercise that algorithm
-/// without touching any Core Graphics APIs.
+/// Models only the real WindowEnumerator's Q1 on-screen pass — the layer==0 +
+/// onscreen + excluded-PID filter and the group-by-PID step — over raw
+/// CGWindowList data, so these tests exercise that algorithm without touching
+/// any Core Graphics APIs. It does NOT reproduce the real enumerator's Q2
+/// off-screen minimized-window pass.
 final class MockWindowEnumerator: WindowEnumerating {
 
     private let data: [MockWindowData]

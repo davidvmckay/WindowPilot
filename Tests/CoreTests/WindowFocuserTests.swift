@@ -109,6 +109,13 @@ final class WindowFocuserTests: XCTestCase {
     }
 
     // MARK: focus policy
+    //
+    // Focus/raise is non-destructive but still must not raise the WRONG window:
+    // when an explicit windowID is given it must resolve BY ID. A title match is
+    // NOT an acceptable fallback for a set ID — a closed target whose app still
+    // holds a same-titled sibling would otherwise AXRaise the sibling. Title
+    // matching applies only to windowID == 0 callers (the CLI convenience
+    // overloads), where any title match remains acceptable.
 
     // Focus: an ID match wins.
     func test_resolution_focus_id_match_succeeds() {
@@ -117,12 +124,23 @@ final class WindowFocuserTests: XCTestCase {
         XCTAssertEqual(r, .matched)
     }
 
-    // Focus: no ID match but a title match is an acceptable fallback (covers
-    // AX enumeration hiccups) even when an ID was requested.
-    func test_resolution_focus_title_fallback_succeeds() {
+    // Focus: an ID match wins even when same-titled siblings are present — the
+    // ID resolves first and the title count is irrelevant once it does.
+    func test_resolution_focus_id_match_wins_over_title_matches() {
+        let r = WindowFocuser.resolution(
+            policy: .focus, windowID: 4242, idMatchFound: true, titleMatchCount: 2)
+        XCTAssertEqual(r, .matched)
+    }
+
+    // Focus: an explicit windowID that does NOT resolve by ID must fail even
+    // when a same-titled window exists — NO title fallback with an ID. (FLIPPED
+    // from the old title-fallback-with-ID behaviour: raising a same-titled
+    // sibling of a closed target violated the "closed windows fail explicitly"
+    // contract.)
+    func test_resolution_focus_id_given_no_id_match_ignores_title_fails() {
         let r = WindowFocuser.resolution(
             policy: .focus, windowID: 4242, idMatchFound: false, titleMatchCount: 1)
-        XCTAssertEqual(r, .matched)
+        XCTAssertEqual(r, .failed)
     }
 
     // Focus: neither ID nor title resolves → failed (no windows.first tail).
@@ -136,6 +154,15 @@ final class WindowFocuserTests: XCTestCase {
     func test_resolution_focus_id0_title_match_succeeds() {
         let r = WindowFocuser.resolution(
             policy: .focus, windowID: 0, idMatchFound: false, titleMatchCount: 1)
+        XCTAssertEqual(r, .matched)
+    }
+
+    // …a windowID == 0 caller with several title matches still resolves (unlike
+    // the destructive policy, focus is non-destructive so ambiguity is tolerated
+    // and the first title match is taken).
+    func test_resolution_focus_id0_multiple_title_matches_succeeds() {
+        let r = WindowFocuser.resolution(
+            policy: .focus, windowID: 0, idMatchFound: false, titleMatchCount: 3)
         XCTAssertEqual(r, .matched)
     }
 

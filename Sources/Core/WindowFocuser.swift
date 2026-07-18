@@ -65,9 +65,12 @@ public final class WindowFocuser: WindowFocusing {
     /// How aggressively a window may be resolved when the exact target is not
     /// found by CGWindowID.
     enum WindowMatchPolicy {
-        /// Focus/raise: an ID match wins; a title match is an acceptable
-        /// fallback (covers AX enumeration hiccups) even when an ID was given.
-        /// Non-destructive, so a single title match is enough.
+        /// Focus/raise: when an ID is given it must resolve BY ID — a title
+        /// match is NOT a fallback (a closed target whose app still holds a
+        /// same-titled sibling would otherwise raise the sibling). Title
+        /// matching applies only when no ID was given (windowID == 0, the CLI
+        /// convenience overloads), where any title match is acceptable since the
+        /// op is non-destructive.
         case focus
         /// Minimize/close: destructive. When an ID is given it must resolve
         /// exactly — never fall back to title or the first window. Title-only
@@ -92,8 +95,14 @@ public final class WindowFocuser: WindowFocusing {
     ) -> WindowResolution {
         switch policy {
         case .focus:
-            // ID first; any title match is an acceptable fallback.
-            return (idMatchFound || titleMatchCount >= 1) ? .matched : .failed
+            if windowID != 0 {
+                // An explicit ID must resolve by ID — never fall back to a
+                // title, so a closed target with a same-titled sibling fails
+                // explicitly instead of raising the sibling.
+                return idMatchFound ? .matched : .failed
+            }
+            // Title-only caller (windowID == 0): any title match is acceptable.
+            return titleMatchCount >= 1 ? .matched : .failed
         case .destructive:
             if windowID != 0 {
                 // Exact ID required — never fall back to title or first window.
@@ -155,8 +164,15 @@ public final class WindowFocuser: WindowFocusing {
         AXUIElementSetAttributeValue(appElement, kAXFrontmostAttribute as CFString, true as CFTypeRef)
 
         guard let axWindow else {
-            print("[WP] focus: no AX window match for wid=\(windowID) '\(windowTitle)'")
-            return false
+            // CGS-only path: AX omitted the window (a documented cross-Space AX
+            // limitation) but CGS still knows it — reaching here past the guard
+            // above means windowKnownToCGS(windowID) is true. The CGS/SLPS/
+            // frontmost side effects above are precisely what focus a cross-Space
+            // window, and there is no AX handle to raise, so report best-effort
+            // success rather than a spurious failure (which would fire a wrong
+            // "Couldn't focus" toast despite the Space switch having worked).
+            print("[WP] focus: CGS-only path for wid=\(windowID) (AX omitted the window)")
+            return true
         }
         let raiseResult = AXUIElementPerformAction(axWindow, kAXRaiseAction as CFString)
         if raiseResult != .success {

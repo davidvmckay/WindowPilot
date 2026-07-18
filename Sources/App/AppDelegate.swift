@@ -108,9 +108,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
-        // Use osascript with admin privileges to create a symlink
+        // Reject paths with control characters before building the script —
+        // nothing sane lives at such a path, and it's not worth escaping.
+        guard !ShellQuoting.containsControlCharacters(bundlePath),
+              !ShellQuoting.containsControlCharacters(cliDest) else { return }
+
+        // Use osascript with admin privileges to create a symlink. The path
+        // and destination are embedded as AppleScript string literals, then
+        // passed through the shell's own `quoted form of` — the shell never
+        // sees an interpolated, unquoted path.
+        let p = ShellQuoting.appleScriptStringLiteral(bundlePath)
+        let d = ShellQuoting.appleScriptStringLiteral(cliDest)
         let script = """
-            do shell script "mkdir -p /usr/local/bin && ln -sf \\\"\(bundlePath)\\\" \\\"\(cliDest)\\\"" with administrator privileges
+            set p to "\(p)"
+            set d to "\(d)"
+            do shell script "mkdir -p /usr/local/bin && ln -sf " & quoted form of p & " " & quoted form of d with administrator privileges
         """
         if let appleScript = NSAppleScript(source: script) {
             var error: NSDictionary?

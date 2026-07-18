@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let screenshotCache = ScreenshotCache()
 
     private var hasScreenRecording = false
+    private var screenRecordingRequested = false
     private var workspaceObserver: Any?
     private var trackingTimer: Timer?
     private var lastTrackedWindowID: UInt32 = 0
@@ -43,7 +44,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Permissions.checkAccessibility()
-        hasScreenRecording = Permissions.checkScreenRecording()
+        // Passive check only — the prompting request is deferred to the
+        // first actual preview need (see wirePanel's onWindowSelected).
+        hasScreenRecording = Permissions.preflightScreenRecording()
 
         panel = PilotPanel()
         panel.updateScreenRecordingPermission(hasScreenRecording)
@@ -62,7 +65,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateManager = UpdateManager()
 
         setupStatusItem()
-        offerCLIInstallation()
 
         if UserDefaults.standard.bool(forKey: "SidebarEnabled") {
             enableSidebar()
@@ -88,16 +90,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - CLI Installation
 
-    private func offerCLIInstallation() {
+    /// Offers to install the CLI tool.
+    ///
+    /// Triggered once per install lifetime, after the first successful
+    /// window activation via the panel — not at launch. Skipped if the CLI
+    /// is already installed, or (unless `force`) if the offer has already
+    /// been shown once, whether accepted or declined
+    /// (`CLIOfferShown` in UserDefaults). The status-bar menu item passes
+    /// `force: true` so a declined offer stays reachable later.
+    private func offerCLIInstallation(force: Bool = false) {
         let cliDest = "/usr/local/bin/windowpilot-cli"
 
         // Skip if already installed
         if FileManager.default.fileExists(atPath: cliDest) { return }
 
+        // Skip if we've already shown the offer once, unless the user is
+        // explicitly asking for it again via the status-bar menu.
+        if !force, UserDefaults.standard.bool(forKey: "CLIOfferShown") { return }
+
         // Find CLI binary inside our app bundle
         guard let bundlePath = Bundle.main.executableURL?.deletingLastPathComponent()
             .appendingPathComponent("windowpilot-cli").path,
               FileManager.default.fileExists(atPath: bundlePath) else { return }
+
+        UserDefaults.standard.set(true, forKey: "CLIOfferShown")
 
         let alert = NSAlert()
         alert.messageText = "Install Command-Line Tool?"
@@ -436,7 +452,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func wirePanel() {
         panel.onWindowSelected = { [weak self] windowInfo in
-            guard let self, self.hasScreenRecording else { return }
+            guard let self else { return }
+            if !self.hasScreenRecording {
+                // First actual need for a preview: request access once per
+                // run (the alert itself is only shown by Permissions when
+                // still ungranted), then resync local + panel state. If
+                // still missing, bail out — the existing placeholder UI
+                // (PreviewView.hasScreenRecordingPermission) covers it.
+                if !self.screenRecordingRequested {
+                    self.screenRecordingRequested = true
+                    self.hasScreenRecording = Permissions.requestScreenRecording()
+                    self.panel.updateScreenRecordingPermission(self.hasScreenRecording)
+                }
+                guard self.hasScreenRecording else { return }
+            }
             self.previewGeneration &+= 1
             let generation = self.previewGeneration
 
@@ -477,7 +506,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.panel.dismiss()
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                self.performFocus(windowInfo)
+                self.performFocus(windowInfo) { [weak self] in
+                    // CLI install offer moves here from launch: fires after the
+                    // first successful window activation via the panel. Idempotent —
+                    // offerCLIInstallation no-ops once already installed or offered.
+                    self?.offerCLIInstallation()
+                }
             }
         }
 
@@ -515,7 +549,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Focus Logic
 
-    private func performFocus(_ windowInfo: WindowInfo) {
+    /// - Parameter onSuccess: Invoked once, synchronously within whichever
+    ///   branch's terminal `focuser.focus` call actually lands (never on
+    ///   failure). Callers that don't care about the outcome (carousel,
+    ///   sidebar) can omit it; the panel's activation path uses it to trigger
+    ///   the CLI install offer after the first successful focus.
+    private func performFocus(_ windowInfo: WindowInfo, onSuccess: (() -> Void)? = nil) {
         // Re-detect fullscreen state via CGS (tracker's isFullScreen can be stale)
         var state = windowInfo.state
         if state != .fullScreen && focuser.isWindowOnFullScreenSpace(windowID: windowInfo.id) {
@@ -556,19 +595,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             exited.map { !self.focuser.isWindowOnFullScreenSpace(windowID: $0.windowID) } ?? true
                         }) { exitedSpace in
                             print("[WP] fullscreen→normal (fallback): full-screen Space \(exitedSpace ? "exited" : "poll timed out (1.5s), proceeding")")
-                            if !self.focuser.focus(
+                            if self.focuser.focus(
                                 pid: info.ownerPID, windowID: info.id,
                                 windowTitle: info.title, state: info.state
                             ) {
+                                onSuccess?()
+                            } else {
                                 ToastHUD.show("Couldn't focus \"\(info.title)\" — it may have closed")
                             }
                         }
                     } else {
                         print("[WP] Ctrl+Arrow switched Space successfully")
-                        if !self.focuser.focus(
+                        if self.focuser.focus(
                             pid: info.ownerPID, windowID: info.id,
                             windowTitle: info.title, state: info.state
                         ) {
+                            onSuccess?()
+                        } else {
                             ToastHUD.show("Couldn't focus \"\(info.title)\" — it may have closed")
                         }
                         self.focuser.raiseWindow(
@@ -587,10 +630,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     exited.map { !self.focuser.isWindowOnFullScreenSpace(windowID: $0.windowID) } ?? true
                 }) { exitedSpace in
                     print("[WP] fullscreen→normal: full-screen Space \(exitedSpace ? "exited" : "poll timed out (1.5s), proceeding")")
-                    if !self.focuser.focus(
+                    if self.focuser.focus(
                         pid: info.ownerPID, windowID: info.id,
                         windowTitle: info.title, state: info.state
                     ) {
+                        onSuccess?()
+                    } else {
                         ToastHUD.show("Couldn't focus \"\(info.title)\" — it may have closed")
                     }
                 }
@@ -616,10 +661,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.focuser.calculateSpaceNavigation(targetWindowID: info.id) == nil
             }) { landed in
                 print("[WP] normal→fullscreen: space \(landed ? "switch landed" : "poll timed out (1.0s), proceeding")")
-                if !self.focuser.focus(
+                if self.focuser.focus(
                     pid: info.ownerPID, windowID: info.id,
                     windowTitle: info.title, state: .normal
                 ) {
+                    onSuccess?()
+                } else {
                     ToastHUD.show("Couldn't focus \"\(info.title)\" — it may have closed")
                 }
                 self.focuser.raiseWindow(
@@ -637,10 +684,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         } else {
             // normal→normal
-            if !focuser.focus(
+            if focuser.focus(
                 pid: info.ownerPID, windowID: info.id,
                 windowTitle: info.title, state: info.state
             ) {
+                onSuccess?()
+            } else {
                 ToastHUD.show("Couldn't focus \"\(info.title)\" — it may have closed")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
@@ -872,6 +921,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sidebarMenuItem.state = UserDefaults.standard.bool(forKey: "SidebarEnabled") ? .on : .off
         menu.addItem(.separator())
         menu.addItem(withTitle: "Change Shortcuts…", action: #selector(showPreferences), keyEquivalent: "")
+        menu.addItem(withTitle: "Install CLI Tool…", action: #selector(installCLIToolAction), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "About WindowPilot", action: #selector(showAbout), keyEquivalent: "")
         menu.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdatesAction), keyEquivalent: "")
@@ -900,6 +950,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func carouselAction() {
         showCarousel()
+    }
+
+    @objc private func installCLIToolAction() {
+        offerCLIInstallation(force: true)
     }
 
     @objc private func showPreferences() {

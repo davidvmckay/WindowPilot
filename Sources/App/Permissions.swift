@@ -41,15 +41,30 @@ enum Permissions {
         return trusted
     }
 
-    /// Checks whether the app has Screen Recording permission.
+    /// Passively checks whether the app has Screen Recording permission,
+    /// without ever triggering the system permission prompt.
     ///
-    /// If not granted, triggers the system permission prompt via
-    /// `CGRequestScreenCaptureAccess()` and shows an alert explaining why
-    /// window titles and previews need this permission.
+    /// Safe to call at launch (or anywhere else that just needs the current
+    /// state) — only `requestScreenRecording()` prompts the user.
     ///
-    /// - Returns: `true` if `CGPreflightScreenCaptureAccess()` returns `true`.
+    /// - Returns: `true` if `CGPreflightScreenCaptureAccess()` reports access.
     @discardableResult
-    static func checkScreenRecording() -> Bool {
+    static func preflightScreenRecording() -> Bool {
+        CGPreflightScreenCaptureAccess()
+    }
+
+    /// Requests Screen Recording permission if not already granted.
+    ///
+    /// Triggers the system permission prompt via
+    /// `CGRequestScreenCaptureAccess()` and shows an alert explaining why
+    /// window titles and previews need this permission. Call this on demand,
+    /// at the first actual point of need (e.g. the first preview capture) —
+    /// not at launch.
+    ///
+    /// - Returns: `true` if `CGPreflightScreenCaptureAccess()` returns `true`
+    ///   after the request completes.
+    @discardableResult
+    static func requestScreenRecording() -> Bool {
         if CGPreflightScreenCaptureAccess() {
             return true
         }

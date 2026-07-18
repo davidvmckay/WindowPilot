@@ -133,11 +133,17 @@ public final class SidebarPanel: NSPanel {
 
     /// Auto-hide over fullscreen on our display (driven by AppDelegate).
     public func setHiddenForFullscreen(_ hidden: Bool) {
+        let wasSuppressed = suppressedForFullscreen
         suppressedForFullscreen = hidden
         if hidden {
             hideHoverPreview()
             orderOut(nil)
-        } else if userWantsVisible {
+        } else if userWantsVisible, wasSuppressed || !isVisible {
+            // Suppression is re-evaluated every 2s tick, so this branch runs
+            // constantly even when nothing changed. Only order front when it
+            // would actually change something (was suppressed, or somehow not
+            // visible) — otherwise this would push the strip above other
+            // apps' floating windows every tick.
             orderFrontRegardless()
         }
     }
@@ -148,18 +154,6 @@ public final class SidebarPanel: NSPanel {
     public func reattachToActiveSpace() {
         guard userWantsVisible, !suppressedForFullscreen else { return }
         orderFrontRegardless()
-    }
-
-    /// Self-healing reassertion: if the strip *should* be on screen but a
-    /// wake/Space race ordered it out behind our back, order it front again.
-    /// Deliberately dumb — it reads intent (`userWantsVisible`), respects
-    /// suppression, and only touches ordering; it never mutates state. Called
-    /// from the tracker's always-path as defense-in-depth for residual edges
-    /// the explicit re-show paths might miss.
-    public func assertVisibleIfWanted() {
-        if userWantsVisible, !suppressedForFullscreen, !isVisible {
-            orderFrontRegardless()
-        }
     }
 
     public func render(pinned: [SidebarSlot], dynamic: [SidebarSlot], focusedWindowID: UInt32?) {

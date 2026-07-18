@@ -344,10 +344,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func trackFocusedWindow() {
-        guard let frontApp = NSWorkspace.shared.frontmostApplication else { return }
+        guard let frontApp = NSWorkspace.shared.frontmostApplication else {
+            // No frontmost app at all (e.g. a windowless desktop after Cmd-Q).
+            // Nothing can be fullscreen behind nothing, so any stale
+            // suppression must clear instead of leaving the strip hidden.
+            sidebar?.setHiddenForFullscreen(false)
+            return
+        }
         let pid = frontApp.processIdentifier
 
-        // Skip our own app
+        // Skip our own app. Deliberately does NOT clear suppression here: our
+        // own panel being frontmost says nothing about the desktop behind
+        // it — a fullscreen app can still be sitting there — so the last
+        // suppression value must be held, not reset.
         if pid == Int32(ProcessInfo.processInfo.processIdentifier) { return }
 
         let appName = frontApp.localizedName ?? "Unknown"
@@ -357,7 +366,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let appElement = AXUIElementCreateApplication(pid)
         var focusedRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &focusedRef) == .success,
-              let focusedWindow = focusedRef else { return }
+              let focusedWindow = focusedRef else {
+            // No AX focused window to read a fullscreen state from — nothing
+            // can be suppressing the strip, so clear any stale suppression.
+            sidebar?.setHiddenForFullscreen(false)
+            return
+        }
 
         // Get window ID
         let axWindow = focusedWindow as! AXUIElement
@@ -366,7 +380,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             dlsym(dlopen(nil, RTLD_LAZY), "_AXUIElementGetWindow"),
             to: (@convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError).self
         )
-        guard getWindowFunc(axWindow, &windowID) == .success, windowID != 0 else { return }
+        guard getWindowFunc(axWindow, &windowID) == .success, windowID != 0 else {
+            // Same reasoning: no resolvable window ID means nothing can be
+            // fullscreen-suppressing the strip right now.
+            sidebar?.setHiddenForFullscreen(false)
+            return
+        }
 
         // Sidebar fullscreen-suppression must be re-evaluated on EVERY tick —
         // BEFORE the same-window guard below. The guard exists to skip the
@@ -508,10 +527,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             hideForFullscreen = cocoaBounds.intersects(stripScreenFrame)
         }
         sidebar.setHiddenForFullscreen(hideForFullscreen)
-
-        // Defense-in-depth: reassert visibility if nothing wants the strip
-        // hidden but a wake/Space race ordered it out behind our back.
-        sidebar.assertVisibleIfWanted()
     }
 
     // MARK: - Panel Wiring

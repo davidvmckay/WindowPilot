@@ -471,7 +471,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         panel.onWindowClose = { [weak self] windowInfo in
             guard let self else { return }
-            if !self.focuser.close(pid: windowInfo.ownerPID, windowTitle: windowInfo.title) {
+            if !self.focuser.close(pid: windowInfo.ownerPID, windowID: windowInfo.id, windowTitle: windowInfo.title) {
                 ToastHUD.show("Couldn't close \"\(windowInfo.title)\"")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
@@ -481,7 +481,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         panel.onWindowMinimize = { [weak self] windowInfo in
             guard let self else { return }
-            if !self.focuser.minimize(pid: windowInfo.ownerPID, windowTitle: windowInfo.title) {
+            if !self.focuser.minimize(pid: windowInfo.ownerPID, windowID: windowInfo.id, windowTitle: windowInfo.title) {
                 ToastHUD.show("Couldn't minimize \"\(windowInfo.title)\"")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
@@ -671,14 +671,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         panel.onWindowClosed = { [weak self] windowInfo in
             guard let self else { return }
-            if !self.focuser.close(pid: windowInfo.ownerPID, windowTitle: windowInfo.title) {
+            if !self.focuser.close(pid: windowInfo.ownerPID, windowID: windowInfo.id, windowTitle: windowInfo.title) {
                 ToastHUD.show("Couldn't close \"\(windowInfo.title)\"")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.syncSidebar() }
         }
         panel.onWindowMinimized = { [weak self] windowInfo in
             guard let self else { return }
-            if !self.focuser.minimize(pid: windowInfo.ownerPID, windowTitle: windowInfo.title) {
+            if !self.focuser.minimize(pid: windowInfo.ownerPID, windowID: windowInfo.id, windowTitle: windowInfo.title) {
                 ToastHUD.show("Couldn't minimize \"\(windowInfo.title)\"")
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.syncSidebar() }

@@ -63,6 +63,50 @@ public final class WindowFocuser: WindowFocusing {
 
     public init() {}
 
+    // MARK: - Target resolution (pure decision)
+
+    /// How aggressively a window may be resolved when the exact target is not
+    /// found by CGWindowID.
+    enum WindowMatchPolicy {
+        /// Focus/raise: an ID match wins; a title match is an acceptable
+        /// fallback (covers AX enumeration hiccups) even when an ID was given.
+        /// Non-destructive, so a single title match is enough.
+        case focus
+        /// Minimize/close: destructive. When an ID is given it must resolve
+        /// exactly — never fall back to title or the first window. Title-only
+        /// resolution is allowed solely when no ID was given AND the title is
+        /// unambiguous (exactly one window matches).
+        case destructive
+    }
+
+    enum WindowResolution: Equatable {
+        case matched
+        case failed
+    }
+
+    /// Pure matched/failed decision — no AX access, unit-testable in isolation.
+    /// `idMatchFound`: an AX window matched the requested CGWindowID.
+    /// `titleMatchCount`: how many windows matched the requested title.
+    static func resolution(
+        policy: WindowMatchPolicy,
+        windowID: UInt32,
+        idMatchFound: Bool,
+        titleMatchCount: Int
+    ) -> WindowResolution {
+        switch policy {
+        case .focus:
+            // ID first; any title match is an acceptable fallback.
+            return (idMatchFound || titleMatchCount >= 1) ? .matched : .failed
+        case .destructive:
+            if windowID != 0 {
+                // Exact ID required — never fall back to title or first window.
+                return idMatchFound ? .matched : .failed
+            }
+            // Title-only: act solely when the title is unambiguous.
+            return titleMatchCount == 1 ? .matched : .failed
+        }
+    }
+
     public func focus(pid: Int32, windowID: UInt32, windowTitle: String, state: WindowState) -> Bool {
         guard hasAccessibilityPermission() else { return false }
 
@@ -71,10 +115,15 @@ public final class WindowFocuser: WindowFocusing {
         let axResult = AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef)
         let windows = (axResult == .success) ? (windowsRef as? [AXUIElement] ?? []) : []
 
-        // Match by CGWindowID first (reliable), fall back to title match
-        let axWindow = findWindowByID(windowID, in: windows)
-            ?? findWindow(matching: windowTitle, in: windows)
-            ?? windows.first
+        // Match by CGWindowID first (reliable), fall back to title match.
+        // No windows.first tail: an unresolved target must fail (return false)
+        // rather than silently raising the app's first window.
+        let byID = findWindowByID(windowID, in: windows)
+        let byTitle = (byID == nil) ? findWindow(matching: windowTitle, in: windows) : nil
+        let axWindow: AXUIElement? = Self.resolution(
+            policy: .focus, windowID: windowID,
+            idMatchFound: byID != nil, titleMatchCount: byTitle != nil ? 1 : 0
+        ) == .matched ? (byID ?? byTitle) : nil
 
         print("[WP] focus: pid=\(pid) wid=\(windowID) state=\(state) axMatch=\(axWindow != nil)")
 
@@ -113,29 +162,56 @@ public final class WindowFocuser: WindowFocusing {
     // MARK: - Window actions
 
     /// Minimize a window via AX. Returns true on success.
-    public func minimize(pid: Int32, windowTitle: String) -> Bool {
+    /// Destructive: resolves the exact window by CGWindowID (no fallback when
+    /// an ID is given); see `resolveDestructiveTarget`.
+    public func minimize(pid: Int32, windowID: UInt32, windowTitle: String) -> Bool {
         guard hasAccessibilityPermission() else { return false }
         let appElement = AXUIElementCreateApplication(pid)
         var windowsRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef) == .success,
               let windows = windowsRef as? [AXUIElement],
-              let window = findWindow(matching: windowTitle, in: windows) else { return false }
+              let window = resolveDestructiveTarget(windowID: windowID, windowTitle: windowTitle, in: windows)
+        else { return false }
         return AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, true as CFTypeRef) == .success
     }
 
     /// Close a window via AX. Returns true on success.
-    public func close(pid: Int32, windowTitle: String) -> Bool {
+    /// Destructive: resolves the exact window by CGWindowID (no fallback when
+    /// an ID is given); see `resolveDestructiveTarget`.
+    public func close(pid: Int32, windowID: UInt32, windowTitle: String) -> Bool {
         guard hasAccessibilityPermission() else { return false }
         let appElement = AXUIElementCreateApplication(pid)
         var windowsRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef) == .success,
               let windows = windowsRef as? [AXUIElement],
-              let window = findWindow(matching: windowTitle, in: windows) else { return false }
+              let window = resolveDestructiveTarget(windowID: windowID, windowTitle: windowTitle, in: windows)
+        else { return false }
         // Find the close button and press it
         var buttonRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(window, kAXCloseButtonAttribute as CFString, &buttonRef) == .success,
               let closeButton = buttonRef as! AXUIElement? else { return false }
         return AXUIElementPerformAction(closeButton, kAXPressAction as CFString) == .success
+    }
+
+    /// Resolve the exact window for a destructive op. Delegates the safe/unsafe
+    /// decision to the pure `resolution(policy: .destructive, …)` helper: an
+    /// explicit windowID must match by CGWindowID (never a title or first-window
+    /// fallback); a title is honoured only when no ID was given AND it is
+    /// unambiguous (exactly one exact-title match).
+    private func resolveDestructiveTarget(
+        windowID: UInt32, windowTitle: String, in windows: [AXUIElement]
+    ) -> AXUIElement? {
+        let byID = findWindowByID(windowID, in: windows)
+        let titleMatches = windows.filter { getTitle(of: $0) == windowTitle }
+        switch Self.resolution(
+            policy: .destructive, windowID: windowID,
+            idMatchFound: byID != nil, titleMatchCount: titleMatches.count
+        ) {
+        case .failed:
+            return nil
+        case .matched:
+            return byID ?? titleMatches.first
+        }
     }
 
     // MARK: - Full-screen Space exit

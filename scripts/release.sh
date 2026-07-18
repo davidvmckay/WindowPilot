@@ -13,16 +13,32 @@ cd "$(dirname "$0")/.."
 
 VERSION="${1:?usage: scripts/release.sh <version> [notes.html]}"
 
-# --- Upfront validation. Must run before anything touches Version.swift —
-# the stamp/restore logic below assumes VERSION is well-formed and the file
-# starts clean, otherwise it could commit garbage or clobber a user's
-# in-progress edit.
+# --- Upfront validation. Must run before anything touches Version.swift or
+# builds — the stamp/restore logic below assumes VERSION is well-formed and
+# the file starts clean, otherwise it could commit garbage or clobber a
+# user's in-progress edit. The branch and tracked-tree checks below exist so
+# that whatever gets built and shipped in the DMG is exactly what the pushed
+# commit/tag contains — reproducibility, not just Version.swift hygiene.
 if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "Invalid version '${VERSION}' — expected X.Y.Z (e.g. 1.4.0)" >&2
   exit 1
 fi
+if [ "$(git rev-parse --abbrev-ref HEAD)" != "main" ]; then
+  echo "Refusing to release from branch '$(git rev-parse --abbrev-ref HEAD)' — releases must be built from main" >&2
+  exit 1
+fi
+# Specific message first (common case, easy fix); the whole-tree check right
+# after supersedes it but a pinpointed diagnostic is worth the extra check.
 if ! git diff --quiet -- Sources/CLI/Version.swift || ! git diff --cached --quiet -- Sources/CLI/Version.swift; then
   echo "Sources/CLI/Version.swift has uncommitted changes — commit or stash them before releasing" >&2
+  exit 1
+fi
+# Whole tracked tree must be clean: a dirty tracked file compiles into the
+# shipped DMG while the pushed/tagged commit lacks it, breaking
+# reproducibility. Untracked files are deliberately exempt — WindowPilot.app/
+# (bundle skeleton) and doc drafts are untracked by design.
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo "Working tree has uncommitted changes to tracked files — commit or stash them before releasing (untracked files are fine)" >&2
   exit 1
 fi
 
@@ -157,6 +173,8 @@ fi
 #         BEFORE the appcast that points at it goes live, or Sparkle clients
 #         see a 404 enclosure.
 if [ "${DRY_RUN:-0}" != "1" ]; then
+  # Belt-and-suspenders: already checked upfront, but re-checked here in case
+  # the branch was switched mid-run (the build takes long enough for that).
   BRANCH="$(git branch --show-current)"
   if [ "$BRANCH" != "main" ]; then
     echo "Refusing to publish from branch '$BRANCH' — the feed lives on main" >&2

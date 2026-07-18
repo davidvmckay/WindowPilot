@@ -137,6 +137,17 @@ public final class WindowEnumerator: WindowEnumerating {
     /// logic is unit-testable without a live Accessibility session.
     static func realAXWindows(_ pid: pid_t) -> [(id: UInt32, isMinimized: Bool)]? {
         let appElement = AXUIElementCreateApplication(pid)
+        // Bound per-PID AX messaging so first-call enumeration latency stays under the
+        // 500ms QD-01 cap. detectMinimized now queries every candidate PID (the Q2 name
+        // guard is gone), and each cold-contact kAXWindows round-trip costs ~15-30ms; with
+        // ~30 candidate PIDs the serial sum alone overshoots 500ms on call 1. The
+        // process-global default timeout is 6s, and empirically no single call exceeds
+        // ~35ms here, so a 50-100ms cap never fires — the value must sit below the per-call
+        // mean to clip the aggregate. 10ms brings call-1 to ~400ms (comfortable margin);
+        // 20ms+ is ineffective. Safe by construction: a timeout surfaces as a query
+        // failure ⇒ realAXWindows returns nil ⇒ detectMinimized's AX-failure branch drops
+        // only untitled off-screen entries (the lattice-safe fallback), never a wrong focus.
+        AXUIElementSetMessagingTimeout(appElement, 0.01)
         var windowsRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef) == .success,
               let axWindows = windowsRef as? [AXUIElement] else { return nil }

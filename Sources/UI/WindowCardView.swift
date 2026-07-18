@@ -69,7 +69,7 @@ public final class WindowCardView: NSView {
             iconView.image = app.icon
         }
         nameLabel.stringValue = appName
-        nameLabel.font = .systemFont(ofSize: 10)
+        nameLabel.font = .systemFont(ofSize: 11)
         nameLabel.textColor = .secondaryLabelColor
         nameLabel.lineBreakMode = .byTruncatingTail
         if showsLabelRow {

@@ -294,7 +294,7 @@ final class RecentCardView: NSView {
 
         appNameLabel.stringValue = tracked.appName
         appNameLabel.textColor = .secondaryLabelColor
-        appNameLabel.font = .systemFont(ofSize: 10)
+        appNameLabel.font = .systemFont(ofSize: 11)
         appNameLabel.lineBreakMode = .byTruncatingTail
         appNameLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
@@ -306,7 +306,7 @@ final class RecentCardView: NSView {
         // Meta
         metaLabel.stringValue = "\(tracked.durationText)  ·  \(tracked.agoText)"
         metaLabel.textColor = .tertiaryLabelColor
-        metaLabel.font = .systemFont(ofSize: 10)
+        metaLabel.font = .systemFont(ofSize: 11)
 
         addSubview(appIconView)
         addSubview(appNameLabel)

@@ -5,7 +5,7 @@ import WindowPilotCore
 
 /// Two-level NSOutlineView wrapper.
 /// Level 1 (group): AppNode  — icon + name + window count badge
-/// Level 2 (leaf):  WindowInfo — colored dot + truncated title
+/// Level 2 (leaf):  WindowInfo — state indicator + truncated title
 public final class TreeView: NSView {
 
     // MARK: Subviews
@@ -335,28 +335,31 @@ extension TreeView: NSOutlineViewDelegate {
         let container = NSView()
         container.translatesAutoresizingMaskIntoConstraints = false
 
-        // State indicator — SF Symbol icon with distinct color per state
+        // State indicator — ONE monochrome SF Symbol whose shape (not color)
+        // carries the window's state: a plain dot for normal, a minus-circle
+        // for minimized, and an expand-arrows circle for full screen.
         let indicator = NSImageView()
         indicator.translatesAutoresizingMaskIntoConstraints = false
         indicator.imageScaling = .scaleProportionallyDown
 
-        let symbolConfig = NSImage.SymbolConfiguration(pointSize: 10, weight: .medium)
-
         switch win.state {
         case .normal:
+            let symbolConfig = NSImage.SymbolConfiguration(pointSize: 6, weight: .medium)
             indicator.image = NSImage(systemSymbolName: "circle.fill", accessibilityDescription: "Window")?
                 .withSymbolConfiguration(symbolConfig)
-            indicator.contentTintColor = dotColor(for: win)
+            indicator.contentTintColor = .tertiaryLabelColor
 
         case .fullScreen:
-            indicator.image = NSImage(systemSymbolName: "arrow.up.left.and.arrow.down.right", accessibilityDescription: "Full Screen")?
+            let symbolConfig = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
+            indicator.image = NSImage(systemSymbolName: "arrow.up.left.and.arrow.down.right.circle", accessibilityDescription: "Full Screen")?
                 .withSymbolConfiguration(symbolConfig)
-            indicator.contentTintColor = .systemCyan
+            indicator.contentTintColor = .controlAccentColor
 
         case .minimized:
-            indicator.image = NSImage(systemSymbolName: "minus.circle.fill", accessibilityDescription: "Minimized")?
+            let symbolConfig = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
+            indicator.image = NSImage(systemSymbolName: "minus.circle", accessibilityDescription: "Minimized")?
                 .withSymbolConfiguration(symbolConfig)
-            indicator.contentTintColor = .systemYellow
+            indicator.contentTintColor = .secondaryLabelColor
         }
 
         // Window title label
@@ -381,22 +384,6 @@ extension TreeView: NSOutlineViewDelegate {
         ])
 
         return container
-    }
-
-    // MARK: Dot color palette
-
-    private static let dotPalette: [NSColor] = [
-        NSColor(red: 0.35, green: 0.70, blue: 1.00, alpha: 1),   // soft blue
-        NSColor(red: 0.40, green: 0.85, blue: 0.55, alpha: 1),   // mint green
-        NSColor(red: 1.00, green: 0.65, blue: 0.30, alpha: 1),   // warm orange
-        NSColor(red: 0.85, green: 0.45, blue: 0.90, alpha: 1),   // lavender
-        NSColor(red: 1.00, green: 0.45, blue: 0.45, alpha: 1),   // coral red
-        NSColor(red: 0.40, green: 0.90, blue: 0.90, alpha: 1),   // teal
-    ]
-
-    private func dotColor(for win: WindowInfo) -> NSColor {
-        let idx = Int(win.id) % Self.dotPalette.count
-        return Self.dotPalette[idx]
     }
 }
 

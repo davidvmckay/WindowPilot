@@ -194,4 +194,119 @@ final class WindowFocuserTests: XCTestCase {
         let chosen = WindowFocuser.selectFullScreenDisplayIndex(displays: displays, targetSpaceIDs: [100])
         XCTAssertNil(chosen)
     }
+
+    // MARK: - matchingTitleIndex — pure title-fallback decision
+    //
+    // findWindow(matching:in:) resolves the focus/raise title fallback over
+    // `[AXUIElement]` — opaque AX handles that can't be synthesised with fake
+    // titles in a unit test, so making findWindow itself internal is not a
+    // testable seam. Its post-fallback-deletion logic is a pure function of the
+    // windows' titles, so it delegates to this static helper (mirroring the
+    // resolution / selectFullScreenDisplayIndex pure-helper pattern), which the
+    // tests exercise directly. `nil` title = unreadable/untitled AX window.
+
+    // Exact title match resolves to that window's index.
+    func test_matchingTitle_exact_match_wins() {
+        let idx = WindowFocuser.matchingTitleIndex(
+            query: "main.rs — windowpilot",
+            titles: ["Prefs", "main.rs — windowpilot", "Other"])
+        XCTAssertEqual(idx, 1)
+    }
+
+    // Exact match must win even when an earlier window is a substring candidate —
+    // the exact pass precedes the substring pass, never the reverse.
+    func test_matchingTitle_exact_beats_substring() {
+        let idx = WindowFocuser.matchingTitleIndex(
+            query: "Doc",
+            titles: ["Doc — draft", "Doc"])
+        XCTAssertEqual(idx, 1, "exact 'Doc' at index 1 must beat substring 'Doc — draft' at index 0")
+    }
+
+    // Bidirectional substring drift still resolves for real (non-'Untitled')
+    // titles — the AX title has drifted from the enumerated one (e.g. an
+    // '(Edited)' suffix appeared).
+    func test_matchingTitle_substring_drift_matches_for_real_titles() {
+        let idx = WindowFocuser.matchingTitleIndex(
+            query: "main.rs — windowpilot",
+            titles: ["main.rs — windowpilot (Edited)"])
+        XCTAssertEqual(idx, 0)
+    }
+
+    // Substring drift is also honoured the other way (query contains AX title).
+    func test_matchingTitle_substring_reverse_direction_matches() {
+        let idx = WindowFocuser.matchingTitleIndex(
+            query: "Report — Q3 (Edited)",
+            titles: ["Report — Q3"])
+        XCTAssertEqual(idx, 0)
+    }
+
+    // 'Untitled' query with no exact match → nil. The deleted first-window
+    // branch would have returned windows[0]; the fallback deletion means an
+    // unresolvable 'Untitled' target now fails explicitly.
+    func test_matchingTitle_untitled_no_exact_returns_nil_not_first() {
+        let idx = WindowFocuser.matchingTitleIndex(
+            query: "Untitled",
+            titles: ["Inbox", "Calendar"])
+        XCTAssertNil(idx)
+    }
+
+    // A genuine 'Untitled' AX window is still resolved by the exact pass — the
+    // guard only skips the substring pass, not exact matching.
+    func test_matchingTitle_untitled_exact_still_matches() {
+        let idx = WindowFocuser.matchingTitleIndex(
+            query: "Untitled",
+            titles: ["Something", "Untitled"])
+        XCTAssertEqual(idx, 1)
+    }
+
+    // The substring pass is skipped for an 'Untitled' query so it cannot
+    // false-positive against a real title that merely contains 'Untitled'
+    // ('Untitled'.contains would otherwise match). No exact match → nil.
+    func test_matchingTitle_untitled_does_not_substring_into_real_titles() {
+        let idx = WindowFocuser.matchingTitleIndex(
+            query: "Untitled",
+            titles: ["My Untitled Document"])
+        XCTAssertNil(idx)
+    }
+
+    // An empty query resolves nothing — the substring pass is skipped (every
+    // title contains "") and there is no exact "" window.
+    func test_matchingTitle_empty_query_returns_nil() {
+        let idx = WindowFocuser.matchingTitleIndex(
+            query: "",
+            titles: ["Inbox", "Calendar"])
+        XCTAssertNil(idx)
+    }
+
+    // A wholly unrelated title (the case the deleted any-fullscreen fallback
+    // used to salvage) now resolves to nil rather than an arbitrary window.
+    func test_matchingTitle_unrelated_returns_nil() {
+        let idx = WindowFocuser.matchingTitleIndex(
+            query: "Terminal",
+            titles: ["Safari", "Notes"])
+        XCTAssertNil(idx)
+    }
+
+    // Unreadable (nil) titles are skipped by both passes; a later readable
+    // window still resolves.
+    func test_matchingTitle_skips_nil_titles() {
+        let idx = WindowFocuser.matchingTitleIndex(
+            query: "target",
+            titles: [nil, "target"])
+        XCTAssertEqual(idx, 1)
+    }
+
+    // All titles unreadable → nil (no exact, nothing to substring against).
+    func test_matchingTitle_all_nil_returns_nil() {
+        let idx = WindowFocuser.matchingTitleIndex(
+            query: "target",
+            titles: [nil, nil])
+        XCTAssertNil(idx)
+    }
+
+    // No windows at all → nil.
+    func test_matchingTitle_empty_window_list_returns_nil() {
+        let idx = WindowFocuser.matchingTitleIndex(query: "anything", titles: [])
+        XCTAssertNil(idx)
+    }
 }

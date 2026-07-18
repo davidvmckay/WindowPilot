@@ -132,6 +132,19 @@ public final class WindowFocuser: WindowFocusing {
             AXUIElementSetAttributeValue(axWindow, kAXMinimizedAttribute as CFString, false as CFTypeRef)
         }
 
+        // Gate every side effect (Space switch, front process, menu bar) on the
+        // target actually existing: resolved by AX, OR still known to CGS. A
+        // cross-Space window can be absent from kAXWindowsAttribute (documented
+        // macOS AX limitation) — for it axWindow is nil, yet CGS knows the
+        // window and its CGS/SLPS layers are precisely what focus it, so gating
+        // purely on axWindow would break cross-Space focus. A target unknown to
+        // BOTH AX and CGS is dead (closed / bogus ID): do nothing and fail,
+        // rather than switching Space and activating the app for no window.
+        guard axWindow != nil || windowKnownToCGS(windowID) else {
+            print("[WP] focus: target unknown to AX and CGS for wid=\(windowID) '\(windowTitle)'")
+            return false
+        }
+
         // CGS → SkyLight → AX. All three layers are needed for the system to
         // fully update (Space switch + front process + menu bar). Same sequence
         // for full-screen and normal targets.
@@ -539,6 +552,18 @@ public final class WindowFocuser: WindowFocusing {
 
     // MARK: - CGS Space switching
 
+    /// True when CGS still tracks this window (non-zero ID with a non-empty
+    /// Space list). Lets `focus()` run its CGS/SLPS side effects for a window
+    /// macOS omits from kAXWindowsAttribute — a cross-Space window — while
+    /// denying them to a target neither AX nor CGS knows (closed / bogus ID).
+    private func windowKnownToCGS(_ windowID: UInt32) -> Bool {
+        guard windowID != 0 else { return false }
+        let cid = CGSMainConnectionID()
+        guard let spacesCF = CGSCopySpacesForWindows(cid, 0x7, [windowID as NSNumber] as CFArray),
+              let spaceIDs = spacesCF as? [UInt64] else { return false }
+        return !spaceIDs.isEmpty
+    }
+
     /// Find which Space the window is on and switch that display to it.
     /// This handles full-screen windows on other monitors where activate() fails.
     private func switchDisplayToWindowSpace(windowID: CGWindowID) {
@@ -627,30 +652,40 @@ public final class WindowFocuser: WindowFocusing {
         return nil
     }
 
-    private func findWindow(matching title: String, in windows: [AXUIElement]) -> AXUIElement? {
-        for window in windows {
-            if let axTitle = getTitle(of: window), axTitle == title {
-                return window
-            }
+    /// Pure title-fallback decision for focus/raise. Given each candidate
+    /// window's AX title (`nil` = unreadable/untitled) and the requested title,
+    /// returns the index of the window to fall back to, or `nil`.
+    ///
+    /// Exact match wins. Then a bidirectional substring pass handles real-title
+    /// drift (e.g. an "(Edited)" suffix appearing after enumeration) — but it is
+    /// skipped for an empty or "Untitled" query: a genuine "Untitled" is already
+    /// covered by the exact pass, whereas "Untitled".contains(realTitle) /
+    /// realTitle.contains("Untitled") would false-positive against unrelated
+    /// windows (and every title is "Untitled" without Screen Recording, making
+    /// such a hit meaningless). There is no first-window or any-fullscreen
+    /// fallback: an unresolvable target yields `nil` so the caller fails
+    /// explicitly rather than acting on the wrong window. No AX access — pure,
+    /// so it (not the AXUIElement-bound `findWindow`) is the unit-test seam.
+    static func matchingTitleIndex(query: String, titles: [String?]) -> Int? {
+        // Exact match first (a nil title never equals a concrete query).
+        for (i, title) in titles.enumerated() where title == query {
+            return i
         }
-        if title == "Untitled" && !windows.isEmpty {
-            return windows[0]
-        }
-        for window in windows {
-            if let axTitle = getTitle(of: window) {
-                if axTitle.contains(title) || title.contains(axTitle) {
-                    return window
-                }
-            }
-        }
-        for window in windows {
-            var fsRef: CFTypeRef?
-            if AXUIElementCopyAttributeValue(window, "AXFullScreen" as CFString, &fsRef) == .success,
-               (fsRef as? Bool) == true {
-                return window
+        // Substring drift only for a concrete, non-"Untitled" query.
+        guard !query.isEmpty, query != "Untitled" else { return nil }
+        for (i, title) in titles.enumerated() {
+            guard let title else { continue }
+            if title.contains(query) || query.contains(title) {
+                return i
             }
         }
         return nil
+    }
+
+    private func findWindow(matching title: String, in windows: [AXUIElement]) -> AXUIElement? {
+        let titles = windows.map { getTitle(of: $0) }
+        guard let index = Self.matchingTitleIndex(query: title, titles: titles) else { return nil }
+        return windows[index]
     }
 
     private func getTitle(of window: AXUIElement) -> String? {

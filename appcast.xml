@@ -3,6 +3,33 @@
     <channel>
         <title>WindowPilot</title>
         <item>
+            <title>1.4.2</title>
+            <pubDate>Sat, 18 Jul 2026 11:59:26 -0700</pubDate>
+            <sparkle:version>1.4.2</sparkle:version>
+            <sparkle:shortVersionString>1.4.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description><![CDATA[<h2>Fixes</h2>
+<ul>
+<li><b>Sidebar no longer disappears</b> — exiting fullscreen in the same window (or quitting a fullscreen app) previously left the strip hidden until you switched windows; it now returns within 2 seconds. It also correctly stays hidden over fullscreen games and video apps</li>
+<li><b>Actions always hit the window you selected</b> — switching tabs, filtering, or clicking a just-closed window can no longer focus, close, or minimize a different window; impossible targets now fail with a clear message instead</li>
+<li><b>Rapid switching is safe</b> — quickly clicking several windows in a row no longer lets an earlier switch "steal back" focus mid-animation</li>
+<li><b>Multi-display fullscreen</b> — exiting fullscreen to reach a window now targets the correct display, and windows no longer jump to the main screen</li>
+<li><b>Cross-Space browsing without Screen Recording</b> — windows on other Spaces appear even when the permission is declined</li>
+</ul>
+<h2>Improvements</h2>
+<ul>
+<li>VoiceOver can now navigate and activate all window cards</li>
+<li>One permission prompt at launch instead of three; Screen Recording is requested when first needed</li>
+<li>Panel gets a minimum size, ⌘K focuses search, and the Recent tab fits its content</li>
+<li>Faster first open; screenshot cache is now memory-bounded</li>
+<li>Pinned windows survive app renames and language changes</li>
+<li>Clearer window-state indicators and slightly larger card labels</li>
+</ul>
+]]></description>
+            <enclosure url="https://github.com/ethannortharc/WindowPilot/releases/download/v1.4.2/WindowPilot-1.4.2.dmg" length="3350171" type="application/octet-stream" sparkle:edSignature="uT2R4c5Kq4BIvbWKgAK19EvRRmllIkew2RxWPWNhlx3bm+Eob889E5rfFLN9iR6jhMc+cC+Cma9P5Q/cEId2BQ=="/>
+        </item>
+        <item>
             <title>1.4.1</title>
             <pubDate>Fri, 17 Jul 2026 12:15:03 -0700</pubDate>
             <sparkle:version>1.4.1</sparkle:version>
@@ -37,15 +64,6 @@
 </ul>
 ]]></description>
             <enclosure url="https://github.com/ethannortharc/WindowPilot/releases/download/v1.4.0/WindowPilot-1.4.0.dmg" length="3296352" type="application/octet-stream" sparkle:edSignature="5LhE7aSRV/rC40Au7vjzQiHs5miXDGiHLOkKqjSd0uBiAtALTS+pKvyGS4VQzK0ktfrsSHSW3L+QK6/TAFdaAA=="/>
-        </item>
-        <item>
-            <title>1.3.0</title>
-            <pubDate>Wed, 15 Jul 2026 23:49:23 -0700</pubDate>
-            <sparkle:version>1.3.0</sparkle:version>
-            <sparkle:shortVersionString>1.3.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/ethannortharc/WindowPilot/releases/download/v1.3.0/WindowPilot-1.3.0.dmg" length="2955158" type="application/octet-stream" sparkle:edSignature="Ps3JJx3g6DE3So1dS7MajRJbJJBNX7QQkKr9vNWp4uVPTlkgKGbUOf5jk2BVICtBx1LCpYjvyAyH7DHFCPBpCA=="/>
         </item>
     </channel>
 </rss>

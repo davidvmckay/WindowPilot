@@ -254,7 +254,7 @@ public final class SidebarPanel: NSPanel {
             return empty
         }
 
-        let card = WindowCardView(appName: slot.appName, pid: slot.pid, thumbnail: slot.thumbnail)
+        let card = WindowCardView(appName: slot.appName, windowTitle: slot.window?.title ?? "", pid: slot.pid, thumbnail: slot.thumbnail)
         card.widthAnchor.constraint(equalToConstant: Self.expandedWidth - 8).isActive = true
         card.heightAnchor.constraint(equalToConstant: Self.slotHeight).isActive = true
         if let window = slot.window {

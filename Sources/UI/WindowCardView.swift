@@ -46,10 +46,15 @@ public final class WindowCardView: NSView {
     private let iconView = NSImageView()
     private let nameLabel = NSTextField(labelWithString: "")
     private let showsLabelRow: Bool
+    private let appName: String
+    private let windowTitle: String
+    private var selected = false
 
-    public init(appName: String, pid: Int32, thumbnail: CGImage?, showsLabelRow: Bool = true) {
+    public init(appName: String, windowTitle: String = "", pid: Int32, thumbnail: CGImage?, showsLabelRow: Bool = true) {
         self.thumbnailView = WindowThumbnailView(thumbnail: thumbnail)
         self.showsLabelRow = showsLabelRow
+        self.appName = appName
+        self.windowTitle = windowTitle
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 8
@@ -92,6 +97,7 @@ public final class WindowCardView: NSView {
     }
 
     public func setSelected(_ selected: Bool) {
+        self.selected = selected
         layer?.borderColor = selected
             ? NSColor.controlAccentColor.cgColor
             : NSColor.clear.cgColor
@@ -144,4 +150,28 @@ public final class WindowCardView: NSView {
             onClicked?()
         }
     }
+
+    // MARK: - Accessibility
+    //
+    // This is a plain NSView with no built-in accessibility, so VoiceOver
+    // would otherwise see nothing to activate. Report it as a button whose
+    // press action routes through the SAME onClicked closure the mouse path
+    // (mouseUp above) uses, so VoiceOver "activate" and a real click are
+    // indistinguishable to callers.
+
+    public override func isAccessibilityElement() -> Bool { true }
+
+    public override func accessibilityRole() -> NSAccessibility.Role? { .button }
+
+    public override func accessibilityLabel() -> String? {
+        windowTitle.isEmpty ? appName : "\(appName) — \(windowTitle)"
+    }
+
+    public override func accessibilityPerformPress() -> Bool {
+        guard let onClicked else { return false }
+        onClicked()
+        return true
+    }
+
+    public override func isAccessibilitySelected() -> Bool { selected }
 }

@@ -241,6 +241,7 @@ final class RecentCardView: NSView {
     var onDoubleClicked: ((Int) -> Void)?
 
     private let index: Int
+    private var selected = false
     private let thumbnailView: WindowThumbnailView
     private let infoStack = NSStackView()
     private let appLine = NSStackView()
@@ -321,6 +322,7 @@ final class RecentCardView: NSView {
     }
 
     func setSelected(_ selected: Bool) {
+        self.selected = selected
         layer?.borderColor = selected
             ? NSColor.controlAccentColor.cgColor
             : NSColor.separatorColor.withAlphaComponent(0.3).cgColor
@@ -333,6 +335,32 @@ final class RecentCardView: NSView {
 
     @objc private func handleClick() { onClicked?(index) }
     @objc private func handleDoubleClick() { onDoubleClicked?(index) }
+
+    // MARK: - Accessibility
+    //
+    // Same treatment as WindowCardView (see its Accessibility section):
+    // a plain NSView reports itself as a button whose press action routes
+    // through the SAME onClicked closure the mouse path (the click gesture
+    // recognizer above) uses.
+
+    override func isAccessibilityElement() -> Bool { true }
+
+    override func accessibilityRole() -> NSAccessibility.Role? { .button }
+
+    override func accessibilityLabel() -> String? {
+        let base = titleLabel.stringValue.isEmpty
+            ? appNameLabel.stringValue
+            : "\(appNameLabel.stringValue) — \(titleLabel.stringValue)"
+        return "\(base), \(metaLabel.stringValue)"
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        guard let onClicked else { return false }
+        onClicked(index)
+        return true
+    }
+
+    override func isAccessibilitySelected() -> Bool { selected }
 }
 
 // MARK: - FlippedView

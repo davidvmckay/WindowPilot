@@ -167,7 +167,7 @@ public final class CarouselPanel: NSPanel {
         let spacing: CGFloat = 8
 
         for (index, item) in windows.enumerated() {
-            let card = WindowCardView(appName: item.appName, pid: item.pid, thumbnail: item.thumbnail)
+            let card = WindowCardView(appName: item.appName, windowTitle: item.windowTitle, pid: item.pid, thumbnail: item.thumbnail)
             card.frame = NSRect(
                 x: CGFloat(index) * (cardWidth + spacing),
                 y: 0,

@@ -203,4 +203,8 @@ if [ "${DRY_RUN:-0}" != "1" ]; then
   echo "Released v${VERSION}."
 else
   echo "DRY_RUN: skipped GitHub release and appcast commit. Artifacts: $DMG, appcast.xml"
+  # DRY_RUN never commits appcast.xml (unlike Version.swift, restored by the
+  # EXIT trap above) — restore the tracked file so a local dry run doesn't
+  # leave the tree dirty and trip the next real release's whole-tree preflight.
+  git checkout -- appcast.xml
 fi

@@ -364,11 +364,12 @@ public final class WindowFocuser: WindowFocusing {
     /// No CGS, no SkyLight, no kAXFrontmostAttribute.
     /// Used after activate() has already triggered the Space switch.
     ///
-    /// No windows.first tail: if the exact target (by ID, then title fallback)
-    /// can't be resolved — e.g. it closed between focus() and this call — do
-    /// nothing rather than raising a different window of the same app. Routes
-    /// the same matched/failed decision as focus() through the pure
-    /// `resolution(policy: .focus, …)` helper.
+    /// No windows.first tail: if the exact target — by ID when an ID was given
+    /// (windowID != 0), by title only for the windowID == 0 CLI convenience
+    /// callers — can't be resolved (e.g. it closed between focus() and this
+    /// call), do nothing rather than raising a different window of the same
+    /// app. Routes the same matched/failed decision as focus() through the
+    /// pure `resolution(policy: .focus, …)` helper.
     public func raiseWindow(pid: Int32, windowID: UInt32, windowTitle: String) {
         guard hasAccessibilityPermission() else { return }
         let appElement = AXUIElementCreateApplication(pid)
@@ -530,7 +531,8 @@ public final class WindowFocuser: WindowFocusing {
     /// No windows.first tail: setting AXFullScreen on an arbitrary window is a
     /// disruptive mutation, so route the same matched/failed decision as
     /// focus()/raiseWindow() through the pure `resolution(policy: .focus, …)`
-    /// helper — an ID match wins, a title match is an acceptable fallback. If
+    /// helper — a real ID (windowID != 0) must resolve by ID with no title
+    /// fallback; title matching applies only to windowID == 0 callers. If
     /// neither resolves, do nothing (the window staying un-fullscreened is the
     /// correct, constraint-compliant failure) rather than full-screening a
     /// different window of the same app.

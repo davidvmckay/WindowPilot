@@ -77,6 +77,25 @@ public final class RecentView: NSView {
         selectCard(at: trackedWindows.count > 1 ? 1 : 0)
     }
 
+    /// The content height needed to show every current row without scrolling,
+    /// for a given available width. Mirrors the exact sizing math
+    /// `layoutCards`/`rebuildGrid` use (columns → card width → thumbnail
+    /// height → card height → row count), so callers (PilotPanel, sizing the
+    /// panel to the Recent grid) get the same numbers the grid itself lays
+    /// out to. Returns the same fixed placeholder height `rebuildGrid` uses
+    /// when there are no tracked windows.
+    public func preferredHeight(forWidth width: CGFloat) -> CGFloat {
+        guard !trackedWindows.isEmpty else { return 100 }
+
+        let availableWidth = width - cardPadding * 2 - cardSpacing * CGFloat(columns - 1)
+        let cardWidth = max(availableWidth / CGFloat(columns), 100)
+        let thumbHeight = cardWidth * 0.6 // 5:3 aspect ratio, same as layoutCards
+        let cardHeight = thumbHeight + 52 // thumbnail + info area
+
+        let totalRows = (trackedWindows.count + columns - 1) / columns
+        return cardPadding * 2 + CGFloat(totalRows) * (cardHeight + cardSpacing) - cardSpacing
+    }
+
     // MARK: Keyboard
 
     public override var acceptsFirstResponder: Bool { true }

@@ -33,6 +33,10 @@ public final class PilotPanel: NSPanel {
     internal private(set) var selectedWindow: WindowInfo?
     private var clickOutsideMonitor: Any?
     private var showingRecent = false
+    /// Panel height captured just before shrinking to fit the Recent grid
+    /// (see `fitHeightToRecentContent`), restored when leaving Recent mode.
+    /// `nil` whenever there is nothing to restore (already in All Windows).
+    private var restoreHeight: CGFloat?
 
     // MARK: Callbacks
 
@@ -86,6 +90,25 @@ public final class PilotPanel: NSPanel {
     /// Allow the panel to become key so the search field can receive keyboard events even
     /// though the panel does not activate the application.
     public override var canBecomeKey: Bool { true }
+
+    /// Cmd+K: jump to the search field. Works from either tab — if Recent is
+    /// showing, switch to All Windows first (that's where the search field
+    /// lives). Everything else falls through to `super`, so Esc and all
+    /// other existing key handling (which flows through `keyDown`/the field
+    /// editor, not `performKeyEquivalent`) is untouched.
+    public override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+              event.charactersIgnoringModifiers?.lowercased() == "k"
+        else {
+            return super.performKeyEquivalent(with: event)
+        }
+
+        if showingRecent {
+            switchToTab(recent: false)
+        }
+        searchBar.focusSearchField()
+        return true
+    }
 
     // MARK: Public API
 
@@ -165,6 +188,11 @@ public final class PilotPanel: NSPanel {
         level = .floating
         isReleasedWhenClosed = false
 
+        // Floor for user resizing (and for our own Recent-mode height fit,
+        // which never shrinks past this) — below this the tree/preview/
+        // action bar no longer have room to be usable.
+        minSize = NSSize(width: 640, height: 400)
+
         // ✅ FIX 2: Change from .canJoinAllSpaces to .moveToActiveSpace
         //
         //    .canJoinAllSpaces means the panel exists on ALL Spaces simultaneously,
@@ -242,7 +270,18 @@ public final class PilotPanel: NSPanel {
         splitView.addArrangedSubview(leftContainer)
         splitView.addArrangedSubview(rightStack)
 
-        leftContainer.widthAnchor.constraint(equalToConstant: 280).isActive = true
+        // Left pane (tree): required floor at 220pt so the split can compress
+        // toward the panel's 640pt minSize; a lower-priority 280pt target
+        // (priority < required) keeps it at the original width whenever
+        // there's slack to spare, rather than pinning it there rigidly.
+        leftContainer.widthAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
+        let leftPreferredWidth = leftContainer.widthAnchor.constraint(equalToConstant: 280)
+        leftPreferredWidth.priority = .defaultHigh
+        leftPreferredWidth.isActive = true
+
+        // Right pane (preview + action bar): required floor at 300pt so a
+        // resize never crushes the preview into an unusable sliver.
+        rightStack.widthAnchor.constraint(greaterThanOrEqualToConstant: 300).isActive = true
 
         // --- Recent view (for Recent mode, replaces the split view) ---
         recentView.translatesAutoresizingMaskIntoConstraints = false
@@ -285,6 +324,7 @@ public final class PilotPanel: NSPanel {
     /// is the only other caller, and it also orders the panel front, which
     /// headless tests must avoid.
     internal func switchToTab(recent: Bool) {
+        let wasRecent = showingRecent
         showingRecent = recent
         tabBar.selectedSegment = recent ? 0 : 1
 
@@ -302,6 +342,57 @@ public final class PilotPanel: NSPanel {
         // Without this, ActionBar/preview keep acting on the other tab's window
         // (the confirmed selection-desync bug).
         resyncSelectionToVisibleTab()
+
+        // Recent mode can leave a large blank area below just a few cards;
+        // shrink the panel to fit the actual rows. Gated on the transition
+        // (not just `recent`) so a redundant recent→recent call never
+        // captures an already-shrunk height as the "restore" size, and a
+        // redundant all→all call never no-ops a restore.
+        if recent, !wasRecent {
+            fitHeightToRecentContent()
+        } else if !recent, wasRecent {
+            restorePreviousHeight()
+        }
+    }
+
+    /// Fixed vertical overhead above `recentView`'s own content (tab bar +
+    /// gap). `recentView` is always constrained from `tabBar.bottomAnchor`
+    /// down to `contentView`'s bottom regardless of `isHidden`, so this
+    /// difference is constant across panel sizes — measuring it (rather than
+    /// hardcoding tab-bar-control pixel heights) stays correct if that chrome
+    /// ever changes.
+    private func chromeHeight() -> CGFloat {
+        guard let contentView else { return 0 }
+        contentView.layoutSubtreeIfNeeded()
+        return contentView.frame.height - recentView.frame.height
+    }
+
+    /// Shrink the panel to fit the Recent grid's actual row count. Only ever
+    /// shrinks (`min` against the current height) and never below `minSize`.
+    /// Stores the pre-shrink height so `restorePreviousHeight` can undo it.
+    private func fitHeightToRecentContent() {
+        restoreHeight = frame.height
+        let fitted = recentView.preferredHeight(forWidth: frame.width) + chromeHeight()
+        let target = max(minSize.height, min(fitted, frame.height))
+        setHeightAnimated(target)
+    }
+
+    /// Restore the size captured before the Recent-mode shrink.
+    private func restorePreviousHeight() {
+        guard let height = restoreHeight else { return }
+        restoreHeight = nil
+        setHeightAnimated(max(minSize.height, height))
+    }
+
+    /// Resize the panel's height in place, keeping the top edge stationary
+    /// (matching `setContentSize`'s default anchoring) and animating so the
+    /// resize doesn't visibly snap. No-op if the height barely changes.
+    private func setHeightAnimated(_ height: CGFloat) {
+        guard abs(height - frame.height) > 0.5 else { return }
+        var newFrame = frame
+        newFrame.origin.y = frame.maxY - height
+        newFrame.size.height = height
+        setFrame(newFrame, display: true, animate: true)
     }
 
     /// Resync `selectedWindow` (and the preview/action bar it drives) to whichever

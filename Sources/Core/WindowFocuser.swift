@@ -337,17 +337,28 @@ public final class WindowFocuser: WindowFocusing {
     /// Pure AX raise — ONLY raises the specific window, nothing else.
     /// No CGS, no SkyLight, no kAXFrontmostAttribute.
     /// Used after activate() has already triggered the Space switch.
+    ///
+    /// No windows.first tail: if the exact target (by ID, then title fallback)
+    /// can't be resolved — e.g. it closed between focus() and this call — do
+    /// nothing rather than raising a different window of the same app. Routes
+    /// the same matched/failed decision as focus() through the pure
+    /// `resolution(policy: .focus, …)` helper.
     public func raiseWindow(pid: Int32, windowID: UInt32, windowTitle: String) {
         guard hasAccessibilityPermission() else { return }
         let appElement = AXUIElementCreateApplication(pid)
         var windowsRef: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef)
         let windows = (result == .success) ? (windowsRef as? [AXUIElement] ?? []) : []
-        if let axWindow = findWindowByID(windowID, in: windows)
-            ?? findWindow(matching: windowTitle, in: windows)
-            ?? windows.first {
-            AXUIElementPerformAction(axWindow, kAXRaiseAction as CFString)
-        }
+
+        let byID = findWindowByID(windowID, in: windows)
+        let byTitle = (byID == nil) ? findWindow(matching: windowTitle, in: windows) : nil
+        let axWindow: AXUIElement? = Self.resolution(
+            policy: .focus, windowID: windowID,
+            idMatchFound: byID != nil, titleMatchCount: byTitle != nil ? 1 : 0
+        ) == .matched ? (byID ?? byTitle) : nil
+
+        guard let axWindow else { return }
+        AXUIElementPerformAction(axWindow, kAXRaiseAction as CFString)
     }
 
     /// Light focus: CGS Space switch + AX raise ONLY.

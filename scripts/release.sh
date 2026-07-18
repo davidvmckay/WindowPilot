@@ -12,6 +12,20 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 VERSION="${1:?usage: scripts/release.sh <version> [notes.html]}"
+
+# --- Upfront validation. Must run before anything touches Version.swift —
+# the stamp/restore logic below assumes VERSION is well-formed and the file
+# starts clean, otherwise it could commit garbage or clobber a user's
+# in-progress edit.
+if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "Invalid version '${VERSION}' — expected X.Y.Z (e.g. 1.4.0)" >&2
+  exit 1
+fi
+if ! git diff --quiet -- Sources/CLI/Version.swift || ! git diff --cached --quiet -- Sources/CLI/Version.swift; then
+  echo "Sources/CLI/Version.swift has uncommitted changes — commit or stash them before releasing" >&2
+  exit 1
+fi
+
 NOTES_HTML="${2:-}"
 FEED_URL="${FEED_URL:-https://raw.githubusercontent.com/ethannortharc/WindowPilot/main/appcast.xml}"
 DOWNLOAD_URL_PREFIX="${DOWNLOAD_URL_PREFIX:-https://github.com/ethannortharc/WindowPilot/releases/download/v${VERSION}/}"
@@ -31,25 +45,30 @@ if [ "${SKIP_NOTARIZE:-0}" = "1" ] && [ "${DRY_RUN:-0}" != "1" ]; then
 fi
 
 # --- 1. Build (also materializes Package.resolved on a fresh clone)
-sed -i '' "s/let cliVersion = \".*\"/let cliVersion = \"${VERSION}\"/" Sources/CLI/Version.swift
-# Commit the stamped version BEFORE building, so the commit that later gets
-# pushed and tagged carries the version it ships (mirrors the appcast-commit
-# precedent below). Guard on an actual diff — an unconditional commit would
-# abort the whole release under set -e on a re-run with an unchanged version.
-VERSION_STAMPED=0
-if ! git diff --quiet -- Sources/CLI/Version.swift; then
-  VERSION_STAMPED=1
-  if [ "${DRY_RUN:-0}" != "1" ]; then
-    git add Sources/CLI/Version.swift
-    git commit -m "Stamp CLI version ${VERSION}" -- Sources/CLI/Version.swift
+# Capture Version.swift's original (clean, per validation above) content so
+# it can be restored if anything downstream fails before the stamp is
+# committed. The commit itself doesn't happen until step 8 (after
+# notarize+staple succeed) — see there for why.
+VERSION_SWIFT_BACKUP="$(mktemp -t windowpilot-version-swift)"
+cp Sources/CLI/Version.swift "$VERSION_SWIFT_BACKUP"
+restore_version_swift() {
+  if [ -f "$VERSION_SWIFT_BACKUP" ]; then
+    cp "$VERSION_SWIFT_BACKUP" Sources/CLI/Version.swift
+    rm -f "$VERSION_SWIFT_BACKUP"
   fi
+}
+# DRY_RUN never commits the stamp, so restore on ANY exit (success or
+# failure) to leave the tree clean. Real runs only need to restore on
+# failure BEFORE the commit lands — the trap is disarmed in step 8 right
+# after the commit succeeds, since the commit is then the source of truth
+# and restoring afterward would just make the working tree diverge from HEAD.
+if [ "${DRY_RUN:-0}" = "1" ]; then
+  trap restore_version_swift ERR EXIT
+else
+  trap restore_version_swift ERR
 fi
+sed -i '' "s/let cliVersion = \".*\"/let cliVersion = \"${VERSION}\"/" Sources/CLI/Version.swift
 swift build -c release
-# DRY_RUN never commits (see above) — restore the working tree here instead,
-# AFTER the build so the binary still gets the stamped version in dry runs.
-if [ "${DRY_RUN:-0}" = "1" ] && [ "$VERSION_STAMPED" = "1" ]; then
-  git checkout -- Sources/CLI/Version.swift
-fi
 
 # --- 1b. Sparkle command-line tools (cached, version-matched to Package.resolved)
 SPARKLE_VERSION=$(python3 -c "import json;print([p for p in json.load(open('Package.resolved'))['pins'] if p['identity']=='sparkle'][0]['state']['version'])")
@@ -142,6 +161,18 @@ if [ "${DRY_RUN:-0}" != "1" ]; then
     echo "Refusing to publish from branch '$BRANCH' — the feed lives on main" >&2
     exit 1
   fi
+  # Commit the stamped version now that build+sign+notarize+staple all
+  # succeeded, so the commit that gets pushed and tagged actually carries the
+  # version it ships. Guarded on an actual diff — an unconditional commit
+  # would abort the release under set -e on a re-run with an unchanged
+  # version. Either way, the stamp/restore trap's job is done past this
+  # point: disarm it and drop the backup.
+  if ! git diff --quiet -- Sources/CLI/Version.swift; then
+    git add Sources/CLI/Version.swift
+    git commit -m "Stamp CLI version ${VERSION}" -- Sources/CLI/Version.swift
+  fi
+  trap - ERR
+  rm -f "$VERSION_SWIFT_BACKUP"
   # Push source FIRST — otherwise gh tags the remote's stale HEAD and the
   # release changelog points at pre-release code.
   git push origin HEAD:main

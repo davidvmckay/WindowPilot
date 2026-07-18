@@ -32,7 +32,24 @@ fi
 
 # --- 1. Build (also materializes Package.resolved on a fresh clone)
 sed -i '' "s/let cliVersion = \".*\"/let cliVersion = \"${VERSION}\"/" Sources/CLI/Version.swift
+# Commit the stamped version BEFORE building, so the commit that later gets
+# pushed and tagged carries the version it ships (mirrors the appcast-commit
+# precedent below). Guard on an actual diff — an unconditional commit would
+# abort the whole release under set -e on a re-run with an unchanged version.
+VERSION_STAMPED=0
+if ! git diff --quiet -- Sources/CLI/Version.swift; then
+  VERSION_STAMPED=1
+  if [ "${DRY_RUN:-0}" != "1" ]; then
+    git add Sources/CLI/Version.swift
+    git commit -m "Stamp CLI version ${VERSION}"
+  fi
+fi
 swift build -c release
+# DRY_RUN never commits (see above) — restore the working tree here instead,
+# AFTER the build so the binary still gets the stamped version in dry runs.
+if [ "${DRY_RUN:-0}" = "1" ] && [ "$VERSION_STAMPED" = "1" ]; then
+  git checkout -- Sources/CLI/Version.swift
+fi
 
 # --- 1b. Sparkle command-line tools (cached, version-matched to Package.resolved)
 SPARKLE_VERSION=$(python3 -c "import json;print([p for p in json.load(open('Package.resolved'))['pins'] if p['identity']=='sparkle'][0]['state']['version'])")

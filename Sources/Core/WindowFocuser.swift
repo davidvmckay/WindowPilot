@@ -121,11 +121,13 @@ public final class WindowFocuser: WindowFocusing {
         let axResult = AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef)
         let windows = (axResult == .success) ? (windowsRef as? [AXUIElement] ?? []) : []
 
-        // Match by CGWindowID first (reliable), fall back to title match.
+        // Match by CGWindowID first (reliable). Title matching is computed only
+        // for windowID == 0 (title-only) callers — the strict-ID policy below
+        // discards it whenever an explicit ID is given.
         // No windows.first tail: an unresolved target must fail (return false)
         // rather than silently raising the app's first window.
         let byID = findWindowByID(windowID, in: windows)
-        let byTitle = (byID == nil) ? findWindow(matching: windowTitle, in: windows) : nil
+        let byTitle = (windowID == 0) ? findWindow(matching: windowTitle, in: windows) : nil
         let axWindow: AXUIElement? = Self.resolution(
             policy: .focus, windowID: windowID,
             idMatchFound: byID != nil, titleMatchCount: byTitle != nil ? 1 : 0
@@ -223,12 +225,14 @@ public final class WindowFocuser: WindowFocusing {
     /// decision to the pure `resolution(policy: .destructive, …)` helper: an
     /// explicit windowID must match by CGWindowID (never a title or first-window
     /// fallback); a title is honoured only when no ID was given AND it is
-    /// unambiguous (exactly one exact-title match).
+    /// unambiguous (exactly one exact-title match). Title matches are computed
+    /// only for windowID == 0 (title-only) callers — the strict-ID policy
+    /// discards them whenever an explicit ID is given.
     private func resolveDestructiveTarget(
         windowID: UInt32, windowTitle: String, in windows: [AXUIElement]
     ) -> AXUIElement? {
         let byID = findWindowByID(windowID, in: windows)
-        let titleMatches = windows.filter { getTitle(of: $0) == windowTitle }
+        let titleMatches = (windowID == 0) ? windows.filter { getTitle(of: $0) == windowTitle } : []
         switch Self.resolution(
             policy: .destructive, windowID: windowID,
             idMatchFound: byID != nil, titleMatchCount: titleMatches.count
@@ -292,6 +296,66 @@ public final class WindowFocuser: WindowFocusing {
               let spaceIDs = spacesCF as? [UInt64],
               let spaceID = spaceIDs.first else { return false }
         return CGSSpaceGetType(cid, spaceID) == 4
+    }
+
+    /// Pure decision: which CGSCopyManagedDisplaySpaces descriptor belongs to
+    /// the display identified by `targetUUID`.
+    ///
+    /// With exactly ONE descriptor, it applies to every display regardless of
+    /// its own identifier — return index 0 unconditionally. Either there is a
+    /// single physical display (the descriptor IS the target's), or "Displays
+    /// have separate Spaces" is OFF, in which case CGS collapses all displays
+    /// into one shared descriptor identified as `"Main"` rather than any
+    /// display's UUID — so a strict identifier match would never fire and the
+    /// caller would wrongly conclude no display is full-screen.
+    ///
+    /// With multiple descriptors (separate-Spaces ON, verified: per-display
+    /// UUIDs match one-to-one), return the first index whose identifier
+    /// compares case-insensitively equal to `targetUUID`; a nil identifier
+    /// never matches. No match, or an empty list, → nil.
+    ///
+    /// No CGS/AX access — unit-testable in isolation.
+    static func displayDescriptorIndex(identifiers: [String?], targetUUID: String) -> Int? {
+        if identifiers.count == 1 {
+            return 0
+        }
+        return identifiers.firstIndex {
+            $0?.caseInsensitiveCompare(targetUUID) == .orderedSame
+        }
+    }
+
+    /// True when `displayID`'s CURRENT Space is a full-screen Space
+    /// (`CGSSpaceGetType == 4`). The semantic counterpart to the geometric
+    /// coverage fallback in the sidebar suppression path: a Space-type check is
+    /// immune to window geometry, so it catches native fullscreen even when the
+    /// surface does NOT cover the whole display — on a notched MacBook a
+    /// native-fullscreen window is letterboxed below the notch and can cover
+    /// <99.5% (even <97%), where any area threshold fails.
+    ///
+    /// Matches the display by its UUID string (the "Display Identifier" key in
+    /// CGSCopyManagedDisplaySpaces) via `displayDescriptorIndex`, which also
+    /// handles "Displays have separate Spaces" being OFF — CGS then returns a
+    /// single shared descriptor identified as `"Main"` rather than any
+    /// display's UUID, so the single-descriptor case is used directly instead
+    /// of being matched by identifier. Any lookup failure returns `false`
+    /// (safe default: the strip stays visible). Runs on the 2s suppression
+    /// timer, so — unlike the CGS helpers around it — it does NOT log per call.
+    public func isDisplayShowingFullScreenSpace(displayID: CGDirectDisplayID) -> Bool {
+        guard let uuid = CGDisplayCreateUUIDFromDisplayID(displayID)?.takeRetainedValue() else {
+            return false
+        }
+        let uuidString = CFUUIDCreateString(nil, uuid) as String
+
+        let cid = CGSMainConnectionID()
+        guard let displaySpacesCF = CGSCopyManagedDisplaySpaces(cid),
+              let displaySpaces = displaySpacesCF as? [[String: Any]] else { return false }
+
+        let identifiers = displaySpaces.map { $0["Display Identifier"] as? String }
+        guard let index = Self.displayDescriptorIndex(identifiers: identifiers, targetUUID: uuidString),
+              let currentSpaceInfo = displaySpaces[index]["Current Space"] as? [String: Any],
+              let currentSpaceID = currentSpaceInfo["id64"] as? UInt64 else { return false }
+
+        return CGSSpaceGetType(cid, currentSpaceID) == 4
     }
 
     /// Calculate direction and count of Ctrl+Arrow presses needed to reach
@@ -377,8 +441,11 @@ public final class WindowFocuser: WindowFocusing {
         let result = AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef)
         let windows = (result == .success) ? (windowsRef as? [AXUIElement] ?? []) : []
 
+        // Title matching is computed only for windowID == 0 (title-only)
+        // callers — the strict-ID policy below discards it whenever an
+        // explicit ID is given.
         let byID = findWindowByID(windowID, in: windows)
-        let byTitle = (byID == nil) ? findWindow(matching: windowTitle, in: windows) : nil
+        let byTitle = (windowID == 0) ? findWindow(matching: windowTitle, in: windows) : nil
         let axWindow: AXUIElement? = Self.resolution(
             policy: .focus, windowID: windowID,
             idMatchFound: byID != nil, titleMatchCount: byTitle != nil ? 1 : 0
@@ -545,8 +612,11 @@ public final class WindowFocuser: WindowFocusing {
             return
         }
 
+        // Title matching is computed only for windowID == 0 (title-only)
+        // callers — the strict-ID policy below discards it whenever an
+        // explicit ID is given.
         let byID = findWindowByID(windowID, in: windows)
-        let byTitle = (byID == nil) ? findWindow(matching: windowTitle, in: windows) : nil
+        let byTitle = (windowID == 0) ? findWindow(matching: windowTitle, in: windows) : nil
         let window: AXUIElement? = Self.resolution(
             policy: .focus, windowID: windowID,
             idMatchFound: byID != nil, titleMatchCount: byTitle != nil ? 1 : 0

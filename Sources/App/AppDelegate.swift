@@ -360,13 +360,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func trackFocusedWindow() {
         guard let frontApp = NSWorkspace.shared.frontmostApplication else {
             // No frontmost app at all (e.g. a windowless desktop after Cmd-Q).
-            // No AX surface is readable here, so sync suppression from a CG
-            // snapshot instead — a no-AX-surface app (a game, some Metal apps)
-            // can be frontmost-yet-unreadable AND genuinely covering the
-            // display, so this must be able to HIDE the strip too, not just
-            // clear it: a full mirror of the AX path below, driven by CG
-            // evidence instead of an AX read.
-            syncFullscreenSuppressionFromSnapshot()
+            // HOLD the last suppression state — do NOT re-evaluate from a CG
+            // snapshot here. Coverage can only hide the strip when it's
+            // attributable to the frontmost app: a covering window that belongs
+            // to an active fullscreen app implies that app IS frontmost, so with
+            // no frontmost app the coverage cannot be attributed and must not
+            // hide the strip. Holding mirrors the own-PID early-return just
+            // below, and the next didActivateApplication notification or 2s tick
+            // re-evaluates with a real PID within moments.
             return
         }
         let pid = frontApp.processIdentifier
@@ -390,8 +391,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // tick while genuinely covering the display, so this must actively
             // hide the strip over it (not merely leave a stale suppression
             // alone) — sync both directions from a CG snapshot, mirroring the
-            // AX path driven by CG evidence instead of an AX read.
-            syncFullscreenSuppressionFromSnapshot()
+            // AX path driven by CG evidence instead of an AX read. We DO know
+            // the frontmost app here, so attribute coverage to `pid`: only the
+            // front app's own layer-0 window may hide the strip, never a
+            // maximized background window from a different app.
+            syncFullscreenSuppressionFromSnapshot(frontAppPID: pid)
             return
         }
 
@@ -406,8 +410,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Same reasoning: an unresolvable window ID is another no-AX-surface
             // path, so a covering fullscreen window can still be present and
             // must be actively hidden, not just left held — sync both
-            // directions from a CG snapshot.
-            syncFullscreenSuppressionFromSnapshot()
+            // directions from a CG snapshot. The frontmost app is known, so
+            // attribute coverage to `pid`: only the front app's own layer-0
+            // window may hide the strip, never a maximized background window
+            // from a different app.
+            syncFullscreenSuppressionFromSnapshot(frontAppPID: pid)
             return
         }
 
@@ -555,54 +562,79 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sidebar.setHiddenForFullscreen(hideForFullscreen)
     }
 
-    /// Sync the sidebar's fullscreen suppression from a windowless focus path
-    /// (no frontmost app / no AX focused window / no resolvable window ID) —
-    /// a full mirror of `refreshSidebarFullscreenSuppression`'s AX-driven
-    /// logic, but driven entirely by a CG snapshot since no AX surface is
-    /// readable on this path. Apps with NO AX surface (games, some Metal
-    /// fullscreen apps) fail every AX read yet genuinely cover the display, so
-    /// this drives BOTH directions from the snapshot:
-    ///   - covered (a layer-0 window covers the strip's display) → hide;
-    ///   - uncovered → show (previously the only direction handled — a
-    ///     visible strip used to stay visible over an AX-less fullscreen app
-    ///     indefinitely).
-    /// `setHiddenForFullscreen` is idempotent in both directions (`orderOut`
-    /// on an already-hidden panel; the `wasSuppressed || !isVisible` gate
-    /// skips redundant `orderFrontRegardless` calls), so repeating the same
-    /// verdict tick after tick converges rather than oscillating or churning
-    /// z-order.
+    /// Sync the sidebar's fullscreen suppression from an AX-read-failed focus
+    /// path (no AX focused window / no resolvable window ID) — a mirror of
+    /// `refreshSidebarFullscreenSuppression` for when no AX surface is readable.
+    /// Apps with NO AX surface (games, some Metal fullscreen apps) fail every AX
+    /// read yet genuinely cover the display, so this must drive BOTH directions
+    /// (hide when covered, show when not). Two INDEPENDENT detectors, OR'd —
+    /// either firing hides the strip:
     ///
-    /// Coordinate convention: we compare ENTIRELY in CoreGraphics global space
-    /// (top-left origin) — no Cocoa Y-flip. `WindowSnapshot` bounds come from
-    /// CGWindowList (CG space) and the display frame comes straight from
-    /// `CGDisplayBounds` (also CG space), so no conversion is needed. This is
-    /// the deliberate opposite of `refreshSidebarFullscreenSuppression`, which
-    /// flips CG→Cocoa to intersect against an `NSScreen.frame`. If the strip's
-    /// display ID can't be resolved, the frame is `.zero`, the predicate
-    /// returns false, and we fall back to showing the strip (safe default).
-    private func syncFullscreenSuppressionFromSnapshot() {
+    ///   1. Semantic (CGS Space type): the strip's display is currently showing
+    ///      a native full-screen Space. Immune to geometry — on a notched
+    ///      MacBook a native-fullscreen window is letterboxed below the notch
+    ///      and can cover <99.5% (even <97%), where any area threshold fails.
+    ///      This is a display-level fact, so it is NOT gated on `frontAppPID`:
+    ///      whoever owns the fullscreen Space, the display IS showing it.
+    ///   2. Geometric (coverage ≥99.5% of CGDisplayBounds): catches a borderless
+    ///      AX-less surface (a fullscreen game) that covers 100% of the display
+    ///      but exposes no Space membership. Attributed to `frontAppPID` (and
+    ///      excluding our own PID) so ONLY the front app's own layer-0 window
+    ///      can count — never a maximized background window from a different
+    ///      app. The 0.995 threshold is deliberately strict: 0.97 was WRONG
+    ///      because a maximized (non-fullscreen) window covers everything but
+    ///      the menu bar (~97.8–98.6% on realistic displays), so the front app's
+    ///      own maximized window would trip a 0.97 gate whenever its AX read
+    ///      transiently failed and routed here. 0.995 sits above that band and
+    ///      below the fullscreen surface's 100%.
+    ///
+    /// `setHiddenForFullscreen` is idempotent in both directions (`orderOut` on
+    /// an already-hidden panel; the `wasSuppressed || !isVisible` gate skips
+    /// redundant `orderFrontRegardless`), so repeating the same verdict tick
+    /// after tick converges rather than churning z-order.
+    ///
+    /// Coordinate convention (detector 2): we compare ENTIRELY in CoreGraphics
+    /// global space (top-left origin) — no Cocoa Y-flip. `WindowSnapshot` bounds
+    /// come from CGWindowList (CG space) and the display frame comes straight
+    /// from `CGDisplayBounds` (also CG space). The deliberate opposite of
+    /// `refreshSidebarFullscreenSuppression`, which flips CG→Cocoa to intersect
+    /// an `NSScreen.frame`. If the strip's display ID can't be resolved, detector
+    /// 1 is skipped (false) and detector 2 gets a `.zero` frame (predicate
+    /// returns false), so we fall back to showing the strip (safe default).
+    private func syncFullscreenSuppressionFromSnapshot(frontAppPID: Int32) {
         guard let sidebar else { return }
-        let cgDisplayFrame = stripDisplayCGFrame(for: sidebar)
-        // Exclude our own PID so the coverage check never counts one of our own
-        // windows as the covering surface — the guarantee is the layer-0 filter
-        // PLUS this exclusion, not the implicit "our windows sit above layer 0".
+        let displayID = stripDisplayID(for: sidebar)
+
+        // Detector 1 (semantic): NOT gated on frontAppPID — a display showing a
+        // fullscreen Space is a display-level fact, whoever owns it.
+        let showingFullScreenSpace = displayID.map {
+            focuser.isDisplayShowingFullScreenSpace(displayID: $0)
+        } ?? false
+
+        // Detector 2 (geometric): exclude our own PID so the coverage check
+        // never counts one of our own windows as the covering surface — the
+        // guarantee is the layer-0 filter PLUS this exclusion, not the implicit
+        // "our windows sit above layer 0". Attributed to the front app.
         let ownPID = Int32(ProcessInfo.processInfo.processIdentifier)
+        let cgDisplayFrame = displayID.map(CGDisplayBounds) ?? .zero
         let covered = WindowSnapshot.hasLayerZeroWindowCovering(
-            displayFrame: cgDisplayFrame, excludingPID: ownPID
+            displayFrame: cgDisplayFrame, excludingPID: ownPID, owningPID: frontAppPID
         )
-        sidebar.setHiddenForFullscreen(covered)
+
+        sidebar.setHiddenForFullscreen(showingFullScreenSpace || covered)
     }
 
-    /// The strip's display bounds in CoreGraphics global coords (top-left
-    /// origin), resolved via `CGDisplayBounds` of the screen's display ID so it
-    /// shares CGWindowList's coordinate space with no Y-flip. Returns `.zero`
-    /// when the display number can't be read from the screen.
-    private func stripDisplayCGFrame(for sidebar: SidebarPanel) -> CGRect {
+    /// The `CGDirectDisplayID` of the screen the strip currently lives on (its
+    /// `currentScreen`, falling back to `NSScreen.main`). `nil` when the screen
+    /// number can't be read — callers treat that as "display unresolvable" and
+    /// fall back to their safe default (show the strip). Feeds both the CGS
+    /// fullscreen-Space check and `CGDisplayBounds` for the coverage predicate,
+    /// which share CGWindowList's coordinate space with no Y-flip.
+    private func stripDisplayID(for sidebar: SidebarPanel) -> CGDirectDisplayID? {
         let stripScreen = sidebar.currentScreen ?? NSScreen.main
-        guard let displayID = stripScreen?.deviceDescription[
+        return stripScreen?.deviceDescription[
             NSDeviceDescriptionKey("NSScreenNumber")
-        ] as? CGDirectDisplayID else { return .zero }
-        return CGDisplayBounds(displayID)
+        ] as? CGDirectDisplayID
     }
 
     // MARK: - Panel Wiring

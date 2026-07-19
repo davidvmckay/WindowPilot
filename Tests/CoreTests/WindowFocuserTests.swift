@@ -222,6 +222,86 @@ final class WindowFocuserTests: XCTestCase {
         XCTAssertNil(chosen)
     }
 
+    // MARK: - displayDescriptorIndex — pure display-descriptor selection
+    //
+    // Selects which CGSCopyManagedDisplaySpaces descriptor belongs to a target
+    // display. Descriptors are normally matched by "Display Identifier" — a
+    // UUID string — but when "Displays have separate Spaces" is OFF, CGS
+    // collapses everything into a SINGLE shared descriptor identified as
+    // "Main" rather than any display's UUID. No CGS/AX access — just the
+    // branching, so it is unit-testable in isolation.
+
+    // Single descriptor, identifier "Main" (separate-Spaces OFF) → still
+    // index 0: the one shared descriptor applies to every display, even
+    // though its identifier is not the target's UUID.
+    func test_displayDescriptorIndex_single_descriptor_main_identifier_returns_zero() {
+        let index = WindowFocuser.displayDescriptorIndex(
+            identifiers: ["Main"],
+            targetUUID: "11111111-2222-3333-4444-555555555555"
+        )
+        XCTAssertEqual(index, 0)
+    }
+
+    // Single descriptor whose identifier is some OTHER display's UUID → still
+    // index 0: with exactly one descriptor there is nothing else it could be
+    // (single-display machine, or a stale/mismatched identifier).
+    func test_displayDescriptorIndex_single_descriptor_other_display_uuid_returns_zero() {
+        let index = WindowFocuser.displayDescriptorIndex(
+            identifiers: ["99999999-8888-7777-6666-555555555555"],
+            targetUUID: "11111111-2222-3333-4444-555555555555"
+        )
+        XCTAssertEqual(index, 0)
+    }
+
+    // Multiple descriptors → the index of the one matching the target UUID
+    // (the match sits at index 1, not 0, to prove this isn't just "first"),
+    // and the comparison is case-insensitive. The UUID must contain hex
+    // LETTERS (a–f) so uppercasing actually changes it — an all-digit UUID
+    // would pass even under a case-sensitive compare, testing nothing.
+    func test_displayDescriptorIndex_multiple_descriptors_matches_target_case_insensitive() {
+        let target = "aabbccdd-eeff-3333-4444-555555555555"
+        let identifiers = [
+            "99999999-8888-7777-6666-555555555555",
+            target.uppercased(),
+            "22222222-3333-4444-5555-666666666666",
+        ]
+        let index = WindowFocuser.displayDescriptorIndex(identifiers: identifiers, targetUUID: target)
+        XCTAssertEqual(index, 1)
+    }
+
+    // Multiple descriptors, none matching the target UUID → nil.
+    func test_displayDescriptorIndex_multiple_descriptors_no_match_returns_nil() {
+        let identifiers = [
+            "99999999-8888-7777-6666-555555555555",
+            "22222222-3333-4444-5555-666666666666",
+        ]
+        let index = WindowFocuser.displayDescriptorIndex(
+            identifiers: identifiers,
+            targetUUID: "11111111-2222-3333-4444-555555555555"
+        )
+        XCTAssertNil(index)
+    }
+
+    // No descriptors at all (CGS returned an empty list) → nil.
+    func test_displayDescriptorIndex_empty_array_returns_nil() {
+        let index = WindowFocuser.displayDescriptorIndex(
+            identifiers: [],
+            targetUUID: "11111111-2222-3333-4444-555555555555"
+        )
+        XCTAssertNil(index)
+    }
+
+    // A nil identifier (unreadable "Display Identifier") among multiple
+    // descriptors never matches — it's skipped, not treated as a wildcard.
+    func test_displayDescriptorIndex_nil_identifier_never_matches() {
+        let identifiers: [String?] = [nil, nil]
+        let index = WindowFocuser.displayDescriptorIndex(
+            identifiers: identifiers,
+            targetUUID: "11111111-2222-3333-4444-555555555555"
+        )
+        XCTAssertNil(index)
+    }
+
     // MARK: - matchingTitleIndex — pure title-fallback decision
     //
     // findWindow(matching:in:) resolves the focus/raise title fallback over

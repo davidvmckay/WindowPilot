@@ -65,15 +65,17 @@ final class WindowSnapshotTests: XCTestCase {
     }
 
     func testCoverageThresholdIsHonored() {
-        // A 98%-area window clears the default 0.97 gate but not a stricter one.
+        // A 98%-area window sits BELOW the new 0.995 default (which targets the
+        // ~100% borderless AX-less fullscreen surfaces) yet clears an explicit,
+        // looser 0.97 gate — proving the `coverage` parameter is honored.
         let almostFull = CGRect(x: 0, y: 0, width: 1000, height: 980)
         let entries = [entry(almostFull)]
-        XCTAssertTrue(
+        XCTAssertFalse(
             WindowSnapshot.hasLayerZeroWindowCovering(in: entries, displayFrame: display)
         )
-        XCTAssertFalse(
+        XCTAssertTrue(
             WindowSnapshot.hasLayerZeroWindowCovering(
-                in: entries, displayFrame: display, coverage: 0.99
+                in: entries, displayFrame: display, coverage: 0.97
             )
         )
     }
@@ -101,6 +103,75 @@ final class WindowSnapshotTests: XCTestCase {
         XCTAssertFalse(
             WindowSnapshot.hasLayerZeroWindowCovering(
                 in: entries, displayFrame: display, excludingPID: ownPID
+            )
+        )
+    }
+
+    // MARK: - Owning-PID attribution
+
+    func testOwningPIDMismatchDoesNotCount() {
+        // A full-covering layer-0 window owned by a BACKGROUND app (pid 500)
+        // must NOT count when coverage is attributed to a different front app
+        // (owningPID 300) — otherwise a maximized background window would hide
+        // the strip while the front app (which failed its AX read) is not the
+        // one covering the display.
+        let entries = [entry(display, id: 7, pid: 500)]
+        XCTAssertFalse(
+            WindowSnapshot.hasLayerZeroWindowCovering(
+                in: entries, displayFrame: display, owningPID: 300
+            )
+        )
+    }
+
+    func testOwningPIDMatchCounts() {
+        // The same covering window owned by the front app itself (pid 300 ==
+        // owningPID 300) IS the covering surface → the strip hides.
+        let entries = [entry(display, id: 7, pid: 300)]
+        XCTAssertTrue(
+            WindowSnapshot.hasLayerZeroWindowCovering(
+                in: entries, displayFrame: display, owningPID: 300
+            )
+        )
+    }
+
+    func testNilOwningPIDCountsAnyPID() {
+        // `owningPID: nil` preserves the historic any-PID semantics: a covering
+        // layer-0 window hides the strip regardless of which process owns it.
+        let entries = [entry(display, id: 7, pid: 500)]
+        XCTAssertTrue(
+            WindowSnapshot.hasLayerZeroWindowCovering(
+                in: entries, displayFrame: display, owningPID: nil
+            )
+        )
+    }
+
+    // MARK: - Maximized-window regression (finding 1)
+
+    func testMaximizedFrontWindowDoesNotHide() {
+        // The front app's OWN maximized (non-fullscreen) window covers
+        // everything but the menu bar — here 1000×978 = 97.8% of the display —
+        // and its AX read transiently failed, routing us through the CG-snapshot
+        // fallback with coverage attributed to the front app (pid 300). At the
+        // 0.995 default that 97.8% must NOT register: a maximized window is not
+        // a fullscreen surface and must not hide the strip. (0.97 was wrong
+        // precisely because it swallowed this maximized-window case.)
+        let maximized = CGRect(x: 0, y: 0, width: 1000, height: 978)
+        let entries = [entry(maximized, id: 7, pid: 300)]
+        XCTAssertFalse(
+            WindowSnapshot.hasLayerZeroWindowCovering(
+                in: entries, displayFrame: display, owningPID: 300
+            )
+        )
+    }
+
+    func testFullCoverageFrontWindowStillHidesAtDefault() {
+        // The borderless AX-less game case is still detected at the new, stricter
+        // default: a layer-0 window owned by the front app (pid 300) covering
+        // 100% of CGDisplayBounds clears 0.995 and hides the strip.
+        let entries = [entry(display, id: 7, pid: 300)]
+        XCTAssertTrue(
+            WindowSnapshot.hasLayerZeroWindowCovering(
+                in: entries, displayFrame: display, owningPID: 300
             )
         )
     }

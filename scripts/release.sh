@@ -42,6 +42,10 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
   exit 1
 fi
 
+# The commit this release is built from — re-verified before publishing so
+# the pushed tag can never point at a commit the DMG wasn't built from.
+SOURCE_COMMIT="$(git rev-parse HEAD)"
+
 NOTES_HTML="${2:-}"
 FEED_URL="${FEED_URL:-https://raw.githubusercontent.com/ethannortharc/WindowPilot/main/appcast.xml}"
 DOWNLOAD_URL_PREFIX="${DOWNLOAD_URL_PREFIX:-https://github.com/ethannortharc/WindowPilot/releases/download/v${VERSION}/}"
@@ -178,6 +182,16 @@ if [ "${DRY_RUN:-0}" != "1" ]; then
   BRANCH="$(git branch --show-current)"
   if [ "$BRANCH" != "main" ]; then
     echo "Refusing to publish from branch '$BRANCH' — the feed lives on main" >&2
+    exit 1
+  fi
+  # Build+sign+notarize take minutes — long enough for another terminal to
+  # commit or pull on main mid-run. If HEAD moved, the DMG in hand was built
+  # from a commit that's no longer HEAD, and pushing/tagging now would ship
+  # a tag pointing at code that was never built. Refuse rather than silently
+  # break reproducibility.
+  CURRENT_HEAD="$(git rev-parse HEAD)"
+  if [ "$CURRENT_HEAD" != "$SOURCE_COMMIT" ]; then
+    echo "Refusing to publish: HEAD moved from ${SOURCE_COMMIT} to ${CURRENT_HEAD} during the build — the DMG was built from ${SOURCE_COMMIT}, not the current HEAD. Re-run the release from the current HEAD." >&2
     exit 1
   fi
   # Commit the stamped version now that build+sign+notarize+staple all

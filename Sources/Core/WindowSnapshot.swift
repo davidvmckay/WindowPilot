@@ -84,12 +84,30 @@ public enum WindowSnapshot {
     /// of the target display) so it shares the snapshot's coordinate space —
     /// no Cocoa Y-flip happens here or in the predicate. A degenerate frame
     /// (zero width/height, e.g. an unresolved display) yields `false`.
+    ///
+    /// The `coverage` default of 0.995 targets borderless, AX-less fullscreen
+    /// surfaces (games, video players) that cover 100% of `CGDisplayBounds`. It
+    /// deliberately sits above a maximized window's reach: a maximized
+    /// (non-fullscreen) window leaves the menu bar visible — ≥ ~1.4% of the
+    /// display height — so it tops out around ~98.6% on any realistic display
+    /// (~97.8% on a 1080pt-high display, ~98.3% on a 27" 2K). 0.995 separates
+    /// the two with margin on both sides, so the front app's OWN maximized
+    /// window (whose AX read may transiently fail, routing here) never trips
+    /// this fallback. No bounds-equality check is needed: the intersection math
+    /// already clamps a window LARGER than the display to the overlap, so a
+    /// slightly-oversized fullscreen surface still counts.
+    ///
+    /// `owningPID` non-nil means only windows owned by that process can count
+    /// as the covering surface (attribution: the front app must be the one
+    /// covering the display); `nil` preserves the any-PID semantics — any
+    /// layer-0 window may register as coverage. Forwarded to the predicate.
     public static func hasLayerZeroWindowCovering(
-        displayFrame: CGRect, coverage: CGFloat = 0.97, excludingPID: Int32? = nil
+        displayFrame: CGRect, coverage: CGFloat = 0.995,
+        excludingPID: Int32? = nil, owningPID: Int32? = nil
     ) -> Bool {
         hasLayerZeroWindowCovering(
             in: onScreenWindows(excludingPID: excludingPID),
-            displayFrame: displayFrame, coverage: coverage
+            displayFrame: displayFrame, coverage: coverage, owningPID: owningPID
         )
     }
 
@@ -101,14 +119,27 @@ public enum WindowSnapshot {
     /// `excludingPID` at fetch time and leaves this defaulted to `nil`; the
     /// parameter keeps the exclusion expressible (and unit-testable) for callers
     /// that pass unfiltered entries directly.
+    ///
+    /// `coverage` defaults to 0.995 — see the convenience overload for why that
+    /// separates an AX-less fullscreen surface (~100%) from a maximized window
+    /// (~97.8–98.6%, menu bar still showing).
+    ///
+    /// `owningPID` non-nil means only windows owned by that process can count
+    /// as the covering surface (attribution: the front app must be the one
+    /// covering the display — so a maximized BACKGROUND window from a different
+    /// app never registers as coverage); `nil` preserves the any-PID semantics.
+    /// This is the inverse test of `excludingPID`: `excludingPID` drops one
+    /// process, `owningPID` keeps only one.
     static func hasLayerZeroWindowCovering(
         in entries: [WindowSnapshotEntry], displayFrame: CGRect,
-        coverage: CGFloat = 0.97, excludingPID: Int32? = nil
+        coverage: CGFloat = 0.995, excludingPID: Int32? = nil, owningPID: Int32? = nil
     ) -> Bool {
         guard displayFrame.width > 0, displayFrame.height > 0 else { return false }
         let displayArea = displayFrame.width * displayFrame.height
         for entry in entries
-        where entry.layer == 0 && (excludingPID == nil || entry.pid != excludingPID) {
+        where entry.layer == 0
+            && (excludingPID == nil || entry.pid != excludingPID)
+            && (owningPID == nil || entry.pid == owningPID) {
             let overlap = entry.bounds.intersection(displayFrame)
             guard !overlap.isNull else { continue }
             if overlap.width * overlap.height >= coverage * displayArea { return true }

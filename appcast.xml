@@ -3,6 +3,15 @@
     <channel>
         <title>WindowPilot</title>
         <item>
+            <title>1.4.3</title>
+            <pubDate>Sat, 18 Jul 2026 17:48:24 -0700</pubDate>
+            <sparkle:version>1.4.3</sparkle:version>
+            <sparkle:shortVersionString>1.4.3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/ethannortharc/WindowPilot/releases/download/v1.4.3/WindowPilot-1.4.3.dmg" length="3353930" type="application/octet-stream" sparkle:edSignature="jCviXoUsi+RiQxcspzGuhtZSomKgdIyTgtGgW9U/8nCuXdAfYUbZl2tJpcPALl+8s+FHE0AWv+g5mJxLvSs3BA=="/>
+        </item>
+        <item>
             <title>1.4.2</title>
             <pubDate>Sat, 18 Jul 2026 11:59:26 -0700</pubDate>
             <sparkle:version>1.4.2</sparkle:version>
@@ -45,25 +54,6 @@
 </ul>
 ]]></description>
             <enclosure url="https://github.com/ethannortharc/WindowPilot/releases/download/v1.4.1/WindowPilot-1.4.1.dmg" length="3297410" type="application/octet-stream" sparkle:edSignature="6mQQP9nEl282HbeWWkX0MB9+NCJ4HWLU6DTv1hIgpGGh+7Rbmj5uEokltkLVxKtjWnt4Zo0EA0Bma8Ego6ooDQ=="/>
-        </item>
-        <item>
-            <title>1.4.0</title>
-            <pubDate>Fri, 17 Jul 2026 09:21:04 -0700</pubDate>
-            <sparkle:version>1.4.0</sparkle:version>
-            <sparkle:shortVersionString>1.4.0</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <description><![CDATA[<h2>New: Sidebar Mode (optional)</h2>
-<p>A persistent work strip on the right edge of your screen — see your recent windows at a glance and switch with one click, no hotkey needed.</p>
-<ul>
-<li><b>Off by default</b> — enable it from the menu bar: <b>Show Sidebar</b></li>
-<li><b>Pin</b> your long-lived windows (right-click or drag a card up) — they keep a fixed position, so switching becomes muscle memory</li>
-<li>Recent windows fill the rest, up to 8 cards, adapting to your screen height</li>
-<li>Collapse to a slim edge handle — hover to peek, click a card to switch; the strip never steals focus</li>
-<li>Hides automatically over full-screen apps</li>
-</ul>
-]]></description>
-            <enclosure url="https://github.com/ethannortharc/WindowPilot/releases/download/v1.4.0/WindowPilot-1.4.0.dmg" length="3296352" type="application/octet-stream" sparkle:edSignature="5LhE7aSRV/rC40Au7vjzQiHs5miXDGiHLOkKqjSd0uBiAtALTS+pKvyGS4VQzK0ktfrsSHSW3L+QK6/TAFdaAA=="/>
         </item>
     </channel>
 </rss>

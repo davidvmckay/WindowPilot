@@ -31,3 +31,6 @@ windowpilot-fixes/
 # Release artifacts
 release-archive/
 *.dmg
+
+# Local demo production workspace (plans, raw captures, and launch drafts)
+.demo-studio/

@@ -1272,8 +1272,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             A macOS-native hotkey window navigator.
             See-and-pick your windows instantly.
 
-            by Ethan Zhou
-            © 2026 WindowPilot
+            © 2026 Ethan H.B. Zhou
             """
         alert.alertStyle = .informational
 

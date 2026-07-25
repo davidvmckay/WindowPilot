@@ -126,6 +126,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>LSUIElement</key><true/>
     <key>NSHighResolutionCapable</key><true/>
+    <key>NSHumanReadableCopyright</key><string>© 2026 Ethan H.B. Zhou</string>
     <key>SUFeedURL</key><string>${FEED_URL}</string>
     <key>SUPublicEDKey</key><string>${PUBKEY}</string>
     <key>SUEnableAutomaticChecks</key><true/>

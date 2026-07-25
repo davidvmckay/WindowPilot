@@ -98,4 +98,4 @@ WindowPilot tracks which windows you use in the background (session only, not pe
 
 ## License
 
-MIT
+MIT © 2026 Ethan H.B. Zhou
